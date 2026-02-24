@@ -18,7 +18,7 @@ def textureFeaturesExtractor(img, roi, roiNum):
     roi_name = ["", "GM", "WM", "CSF"]
     textureFeaturesDict = {}
 
-    glcmFeatures = radiomics.glcm.RadiomicsGLCM(img, roi, binCount=128, verbose=True, interpolator=None, symmetricalGLCM=True)
+    glcmFeatures = radiomics.glcm.RadiomicsGLCM(img, roi, label=roiNum, binCount=128, verbose=True, interpolator=None, symmetricalGLCM=True)
     glcmFeatures._initCalculation()
     glcmFeatures._calculateMatrix()
     glcmFeatures._calculateCoefficients()
@@ -44,7 +44,7 @@ def textureFeaturesExtractor(img, roi, roiNum):
     textureFeaturesDict['GLCM_SumEntropy_' + roi_name[roiNum]] = glcmFeatures.getSumEntropyFeatureValue().item()
     textureFeaturesDict['GLCM_SumofSquares_' + roi_name[roiNum]] = glcmFeatures.getSumSquaresFeatureValue().item()
 
-    glszmFeatures = radiomics.glszm.RadiomicsGLSZM(img, roi, binCount=128, verbose=True, interpolator=None)
+    glszmFeatures = radiomics.glszm.RadiomicsGLSZM(img, roi, label=roiNum, binCount=128, verbose=True, interpolator=None)
     glszmFeatures._initCalculation()
     glszmFeatures._calculateMatrix
     glszmFeatures._calculateCoefficients()
@@ -57,27 +57,19 @@ def textureFeaturesExtractor(img, roi, roiNum):
     return textureFeaturesDict
 
 def main():
-    paths = ["OASIS/OASIS3/output/freesurfer"]
+    data_path = "Z:/Users/kimyw/data/sample"
     textures = []
-    for path in paths:
-        for subject in os.listdir(path):
-            if subject == 'conte69' or subject == 'fsaverage': continue
-            sub_path = os.path.join(path, subject)
-            sub_path = os.path.join(sub_path, "mri" if path != "/store8/01.Database/01.Brain/02.HCP/HCP_S1200" else "T1w")
-            print(sub_path)
-            
-            if os.path.exists(os.path.join(sub_path, "gmwmcsf.nii.gz")) == False:
-                continue
-
-            img = sitk.ReadImage(os.path.join(sub_path, "brainmask.nii.gz")) if path != "/store8/01.Database/01.Brain/02.HCP/HCP_S1200" else sitk.ReadImage(os.path.join(sub_path, "T1w_acpc_dc_restore_brain.nii.gz"))
-            roi = sitk.ReadImage(os.path.join(sub_path, "gmwmcsf.nii.gz"))
-
-            texture_dict = {'subject': subject}
-            texture_dict.update(textureFeaturesExtractor(img, roi, 1))
-            texture_dict.update(textureFeaturesExtractor(img, roi, 2))
-            texture_dict.update(textureFeaturesExtractor(img, roi, 3))
-            
-            textures.append(texture_dict)
+    for subject in os.listdir(data_path):
+        sub_path = os.path.join(data_path, subject, "mri")
+        if not os.path.exists(os.path.join(sub_path, "gmwmcsf.nii.gz")):
+            continue
+        img = sitk.ReadImage(os.path.join(sub_path, "brainmask.nii.gz"))
+        roi = sitk.ReadImage(os.path.join(sub_path, "gmwmcsf.nii.gz"))
+        texture_dict = {'subject': subject}
+        texture_dict.update(textureFeaturesExtractor(img, roi, 1))
+        texture_dict.update(textureFeaturesExtractor(img, roi, 2))
+        texture_dict.update(textureFeaturesExtractor(img, roi, 3))
+        textures.append(texture_dict)
 
     with open("radiomics_texture.csv", "w") as f:
         writer = csv.DictWriter(f, textures[0].keys())
