@@ -1,6 +1,7 @@
 import SimpleITK as sitk
 import numpy as np
 import os
+from tqdm import tqdm
 
 def create_gmwmcsf_mask(input_path, output_path):
     seg_img = sitk.ReadImage(input_path)
@@ -46,7 +47,7 @@ def main():
     skipped_count = 0
     error_count = 0
 
-    for idx, subj_dir in enumerate(subject_folders, 1):
+    for idx, subj_dir in enumerate(tqdm(subject_folders), 1):
         input_nii = subj_dir / "mri" / "aparc+aseg.mgz"
         output_nii = subj_dir / "mri" / "gmwmcsf.nii.gz"
 

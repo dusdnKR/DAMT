@@ -40,7 +40,7 @@ def file_to_dict(path, prefix):
     return result
 
 if __name__ == "__main__":
-    data_path = "NFS/Users/kimyw/data/sample"
+    data_path = "/NFS/Users/kimyw/data/sample"
 
     flag = True
     with open(os.path.join(data_path, "feats_local.csv"), "w") as f:

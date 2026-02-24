@@ -6,6 +6,7 @@ import radiomics
 import logging
 import scipy.stats as stats
 from collections import OrderedDict
+from tqdm import tqdm
 
 # set level for all classes
 logger = logging.getLogger("radiomics")
@@ -59,7 +60,7 @@ def textureFeaturesExtractor(img, roi, roiNum):
 def main():
     data_path = "/NFS/Users/kimyw/data/sample"
     textures = []
-    for subject in os.listdir(data_path):
+    for subject in tqdm(os.listdir(data_path)):
         sub_path = os.path.join(data_path, subject, "mri")
         if not os.path.exists(os.path.join(sub_path, "gmwmcsf.nii.gz")):
             continue
