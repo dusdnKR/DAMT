@@ -37,10 +37,10 @@ def file_to_dict(path, prefix):
     return result
 
 if __name__ == "__main__":
-    data_path = "Z:/Users/kimyw/data/sample"
+    data_path = "/NFS/Users/kimyw/data/sample"
 
     flag = True
-    with open('feats_global.csv', 'w') as f:
+    with open(os.path.join(data_path, "feats_global.csv"), "w") as f:
         w = csv.writer(f)
         for subject in os.listdir(data_path):
             lstat_path = os.path.join(data_path, subject, "stats/lh.aparc.DKTatlas.mapped.stats")
@@ -54,6 +54,6 @@ if __name__ == "__main__":
                 flag = False
             w.writerow(result.values())
 
-    df = pd.read_csv("feats_global.csv", index_col="subject")
+    df = pd.read_csv(os.path.join(data_path, "feats_global.csv"), index_col="subject")
     normalization_df = (df - df.mean()) / df.std()
-    normalization_df.to_csv("nfeats_global.csv")
+    normalization_df.to_csv(os.path.join(data_path, "nfeats_global.csv"))

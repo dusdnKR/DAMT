@@ -57,7 +57,7 @@ def textureFeaturesExtractor(img, roi, roiNum):
     return textureFeaturesDict
 
 def main():
-    data_path = "Z:/Users/kimyw/data/sample"
+    data_path = "/NFS/Users/kimyw/data/sample"
     textures = []
     for subject in os.listdir(data_path):
         sub_path = os.path.join(data_path, subject, "mri")
@@ -71,7 +71,7 @@ def main():
         texture_dict.update(textureFeaturesExtractor(img, roi, 3))
         textures.append(texture_dict)
 
-    with open("radiomics_texture.csv", "w") as f:
+    with open(os.path.join(data_path, "radiomics_texture.csv"), "w") as f:
         writer = csv.DictWriter(f, textures[0].keys())
         writer.writeheader()
         writer.writerows(textures)
