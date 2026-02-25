@@ -62,8 +62,8 @@ def get_argparser():
                         help='Optimizer Epsilon (default: 1e-8)')
     parser.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
                         help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
-                        help='Clip gradient norm (default: None, no clipping)')
+    parser.add_argument('--clip-grad', type=float, default=1.0, metavar='NORM',
+                        help='Clip gradient norm (default: 1.0)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
                         help='SGD momentum (default: 0.9)')
     parser.add_argument('--weight-decay', type=float, default=0.05,
@@ -168,7 +168,7 @@ def get_argparser():
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--project', type=str, default="self-supervised-learning")
-    parser.add_argument('--data-path', type=str, default='/store8/01.Database/01.Brain/')
+    parser.add_argument('--data-path', type=str, default="NFS/Users/kimyw/data/fomo60k_wo_scz")
     parser.add_argument('--data-type', type=str, default="OG")
     parser.add_argument('--name', type=str, default="ssl")
     parser.add_argument("--local_rank", type=int, default=0, help="local rank")
@@ -222,6 +222,7 @@ def remove_zerotensor(tensor_p, tensor):
 
 def main():
     args = get_argparser()
+    os.makedirs(args.output_dir, exist_ok=True)
     utils.init_distributed_mode(args)
     utils.fix_random_seeds(args.seed)
     
@@ -314,7 +315,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
         loss_rot = torch.nn.CrossEntropyLoss()
         loss_loc = torch.nn.CrossEntropyLoss()
         loss_contrast = Contrast(args, args.batch_size_per_gpu)
-        loss_atlas = DiceCELoss(to_onehot_y=True, softmax=True) 
+        loss_atlas = torch.nn.CrossEntropyLoss()
         loss_feat = torch.nn.L1Loss()
         loss_texture = torch.nn.L1Loss() # torch.nn.MSELoss()
 
@@ -329,7 +330,14 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                     param_group["weight_decay"] = wd_schedule[it]
 
             images = [im.cuda(non_blocking=True) for im in images]
-            masks = [mask.cuda(non_blocking=True) for mask in masks]
+            atlases = [a.cuda(non_blocking=True) for a in atlases]
+            masks = [mask.float().cuda(non_blocking=True) for mask in masks]
+            radiomics = radiomics.float().cuda(non_blocking=True)
+            features = features.float().cuda(non_blocking=True)
+            loc_trues = loc_trues.long().cuda(non_blocking=True)
+
+            glo_radi = radiomics
+            glo_feat = features
 
             glo_atlas = atlases[0]
             loc_atlas = torch.cat(atlases[1:], dim=0)
@@ -338,11 +346,8 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             loc_mask = torch.cat(masks[1:], dim=0)
 
             glo_x = images[0]
-
             loc_x1 = torch.cat(images[-args.loc_patch_crops_number:], dim=0)
-            x2, _ , _    = rot_rand(args, glo_x, glo_x)
 
-            loc_x1 = torch.cat(images[-args.loc_patch_crops_number:], dim=0)
             x1, a1, rot1 = rot_rand(args, glo_x, glo_atlas)
             x2, _ , _    = rot_rand(args, glo_x, glo_atlas)
             x3, a3, rot2 = rot_rand(args, loc_x1, loc_atlas)
@@ -379,8 +384,8 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 rot_loss = loss_rot(rot_p, rot)
                 loc_loss = loss_loc(loc_p, loc_trues)
                 contrastive_loss = loss_contrast(contrastive1_p, contrastive2_p)
-                glo_atlas_loss = loss_atlas(glo_atlas_p, glo_atlas) if glo_atlas.sum() != 0 else 0
-                loc_atlas_loss = loss_atlas(loc_atlas_p, loc_atlas) if loc_atlas.sum() != 0 else 0
+                glo_atlas_loss = loss_atlas(glo_atlas_p, glo_atlas.squeeze(1).long()) if glo_atlas.sum() != 0 else 0
+                loc_atlas_loss = loss_atlas(loc_atlas_p, loc_atlas.squeeze(1).long()) if loc_atlas.sum() != 0 else 0
                 atlas_loss = 0.5 * (glo_atlas_loss + loc_atlas_loss)
                 feat_loss = 5 * loss_feat(glo_feat_p, glo_feat) if glo_feat.sum() != 0 else 0
                 texture_loss = 5 * loss_texture(texture_p, glo_radi) if glo_radi.sum() != 0 else 0
@@ -388,8 +393,9 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
 
 
             if not math.isfinite(loss.item()):
-                print("Loss is {}, stopping training".format(loss.item()), force=True)
-                sys.exit(1)
+                print("Loss is {}, skipping batch".format(loss.item()), force=True)
+                optimizer.zero_grad()
+                continue
             optimizer.zero_grad()
             if fp16_scaler is None:
                 loss.backward()
@@ -441,19 +447,40 @@ class MaskGenerator:
         return mask
     
 
+# FreeSurfer aparc+aseg label list -> contiguous indices
+FS_LABELS = [0, 2, 4, 5, 7, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 24, 26, 28, 31,
+             41, 43, 44, 46, 47, 49, 50, 51, 52, 53, 54, 58, 60, 63, 77,
+             251, 252, 253, 254, 255,
+             1002, 1003, 1005, 1006, 1007, 1008, 1009, 1010, 1011, 1012, 1013,
+             1014, 1015, 1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024,
+             1025, 1026, 1027, 1028, 1029, 1030, 1031, 1034, 1035,
+             2002, 2003, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013,
+             2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024,
+             2025, 2026, 2027, 2028, 2029, 2030, 2031, 2034, 2035]
+FS_LABEL_MAP = {v: i for i, v in enumerate(FS_LABELS)}
+NUM_ATLAS_CLASSES = len(FS_LABELS)  # 101
+
+def remap_atlas_labels(x):
+    """Remap FreeSurfer aparc+aseg labels to contiguous indices [0, N-1]."""
+    out = torch.zeros_like(x)
+    for orig, mapped in FS_LABEL_MAP.items():
+        out[x == orig] = mapped
+    return out
+
+
 class DataAugmentation(object):
     def __init__(self, local_crops_number, loc_patch_crops_number):
         self.load_image = transforms.Compose(
             [
                 transforms.LoadImaged(keys=["image", "label"], allow_missing_keys=True),
                 transforms.EnsureChannelFirstd(keys=["image", "label"], allow_missing_keys=True),
-                transforms.Lambdad(keys=["image"], func=lambda x: x[0, :, :, :]),
-                transforms.AddChanneld(keys=["image"]),
+                transforms.Lambdad(keys=["image"], func=lambda x: x[0:1]),
                 transforms.EnsureTyped(keys=["image"]),
                 transforms.CropForegroundd(keys=["image", "label"], source_key="image", allow_missing_keys=True),
                 transforms.Spacingd(keys=["image", "label"], pixdim=(1.25, 1.25, 1.25), mode ="nearest", allow_missing_keys=True),
                 transforms.SpatialPadd(keys=["image", "label"], spatial_size=(128,128,128),allow_missing_keys=True),
-                transforms.ScaleIntensityRangePercentilesd(keys="image", lower=0.05, upper=99.95, b_min=0, b_max=1)
+                transforms.ScaleIntensityRangePercentilesd(keys="image", lower=0.05, upper=99.95, b_min=0, b_max=1),
+                transforms.Lambdad(keys=["label"], func=remap_atlas_labels, allow_missing_keys=True),
             ]
         )
         
@@ -470,10 +497,12 @@ class DataAugmentation(object):
         # transformation for the local small crops
         self.local_crops_number = local_crops_number
         self.loc_patch_crops_number = loc_patch_crops_number
-        self.local_transfo = transforms.Compose([
-            transforms.RandSpatialCropd(keys=["image", "label"], roi_size=(56, 56, 56), random_size=False, allow_missing_keys=True), # 56
-            transforms.Resized(keys=["image", "label"], spatial_size=(64, 64, 64), mode = "nearest", allow_missing_keys=True),
-        ])
+        self.local_crop_size = 56
+        self.local_target_size = 64
+        self.local_resize = transforms.Resized(
+            keys=["image", "label"], spatial_size=(64, 64, 64),
+            mode="nearest", allow_missing_keys=True,
+        )
 
         self.glo_mask_generator = MaskGenerator(
             input_size=128,
@@ -489,26 +518,49 @@ class DataAugmentation(object):
             mask_ratio=0.75,
         )
 
-    
-    def get_randlocation(self, num):
-        list = []
-        loc = np.random.randint(0,9)
-        for i in range(num):
-            while loc in list:
-                loc = np.random.randint(0,9)
-            list.append(loc)
+    def _crop_local_with_location(self, data, n_bins=3):
+        """Crop a local patch and compute its spatial location label (0-8).
 
-        return list
+        The volume is divided into a 3x3 grid along the first two spatial
+        dimensions.  The crop center determines which of the 9 bins (locations)
+        the patch belongs to.
+        """
+        cs = self.local_crop_size
+        img = data['image']
+        spatial = np.array(img.shape[1:])  # (D, H, W)
+
+        max_start = np.maximum(spatial - cs, 0)
+        starts = np.array([np.random.randint(0, int(m) + 1) for m in max_start])
+        centers = starts + cs // 2
+
+        bin_sizes = spatial[:2].astype(float) / n_bins
+        bins = np.minimum((centers[:2] / bin_sizes).astype(int), n_bins - 1)
+        loc_label = int(bins[0] * n_bins + bins[1])
+
+        s, e = starts, starts + cs
+        data['image'] = img[:, s[0]:e[0], s[1]:e[1], s[2]:e[2]]
+        if 'label' in data and data['label'] is not None:
+            data['label'] = data['label'][:, s[0]:e[0], s[1]:e[1], s[2]:e[2]]
+
+        data = self.local_resize(data)
+        return data, loc_label
 
     def __call__(self, image):
         image = self.load_image(image)
+        features = torch.as_tensor(np.array(image['features'])).float().squeeze(0)
+        radiomics = torch.as_tensor(np.array(image['radiomics'])).float().squeeze(0)
+
         crops = []
         crops.append(self.global_transfo(image.copy()))
-        crops.append(self.local_transfo(image.copy()))
-        images = [crop['image'] for crop in crops]
-        masks = [self.glo_mask_generator(), self.loc_mask_generator()] #+ [self.loc_mask_generator() for i in range(self.loc_patch_crops_number)]
 
-        return images, masks
+        local_crop, loc_true = self._crop_local_with_location(image.copy())
+        crops.append(local_crop)
+
+        images = [crop['image'] for crop in crops]
+        atlases = [crop['label'] for crop in crops]
+        masks = [self.glo_mask_generator(), self.loc_mask_generator()]
+
+        return images, atlases, masks, radiomics, features, loc_true
 
 
 

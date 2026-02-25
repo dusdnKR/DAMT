@@ -19,7 +19,7 @@ from typing import Optional, Sequence, Tuple, Union
 
 
 class SSLHead_Swin(nn.Module):
-    def __init__(self, args, dim=768):
+    def __init__(self, args, dim=768, feat_dim=566, rad_dim=72):
         super(SSLHead_Swin, self).__init__()
         feature_size = 48
         patch_size = ensure_tuple_rep(2, 3)
@@ -37,6 +37,7 @@ class SSLHead_Swin(nn.Module):
             attn_drop_rate=0.0,
             drop_path_rate=0.1,
             norm_layer=torch.nn.LayerNorm,
+            use_checkpoint=True,
             spatial_dims=3,
         ).to(args.device)
         self.rotation_pre = nn.Identity()
@@ -52,21 +53,21 @@ class SSLHead_Swin(nn.Module):
             nn.Conv3d(dim, 32, 1),
             nn.InstanceNorm3d(32),
             nn.Flatten(),
-            nn.Linear(2048, 138),
+            nn.Linear(2048, feat_dim),
             nn.ReLU(),
         )
         self.loc_feat_head = nn.Sequential(
             nn.Conv3d(dim, 256, 1),
             nn.InstanceNorm3d(256),
             nn.Flatten(),
-            nn.Linear(2048, 138),
+            nn.Linear(2048, feat_dim),
             nn.ReLU(),
         )
         self.texture_head = nn.Sequential(
             nn.Conv3d(dim, 32, 1),
             nn.InstanceNorm3d(32),
             nn.Flatten(),
-            nn.Linear(2048, 72),
+            nn.Linear(2048, rad_dim),
             nn.ReLU(),
         )
 
@@ -81,7 +82,7 @@ class SSLHead_Swin(nn.Module):
         self.patch_size = 2
 
         self.conv =  nn.Conv3d(dim // 16, 1, kernel_size=1, stride=1)
-        self.out = UnetOutBlock(spatial_dims=3, in_channels=feature_size, out_channels=120)
+        self.out = UnetOutBlock(spatial_dims=3, in_channels=feature_size, out_channels=101)
 
     def encode(self, x):
         hidden_states_out = self.SwinViT(x.contiguous())
@@ -106,7 +107,7 @@ class SSLHead_Swin(nn.Module):
 
         z0 = self.SwinViT.pos_drop(z)
         z0_out = self.SwinViT.proj_out(z0.contiguous())
-        z1 = self.SwinViT.layers1[0](z.contiguous())
+        z1 = self.SwinViT.layers1[0](z0.contiguous())
         z1_out = self.SwinViT.proj_out(z1.contiguous())
         z2 = self.SwinViT.layers2[0](z1.contiguous())
         z2_out = self.SwinViT.proj_out(z2.contiguous())
@@ -174,8 +175,8 @@ class SSLHead_Swin(nn.Module):
             x_contrastive = self.forward_contrastive(cls_token)
             x_texture = self.forward_texture(hidden_states_out[4])
             x_glo_feat = self.forward_global(hidden_states_out[4])
-            x_rec, x_atlas = self.forward_decoder(hidden_states_out)
-            return x_rot, x_contrastive, x_texture, x_glo_feat, x_rec, x_atlas
+            x_atlas = self.forward_decoder(hidden_states_out)
+            return x_rot, x_contrastive, x_texture, x_glo_feat, x_atlas
         elif type == "global2":
             x_rot = self.forward_rot(cls_token)
             x_contrastive = self.forward_contrastive(cls_token)
@@ -183,8 +184,8 @@ class SSLHead_Swin(nn.Module):
         elif type == "local":
             x_loc = self.forward_loc(cls_token)
             x_loc_feat = self.forward_local(hidden_states_out[4])
-            x_rec, x_atlas = self.forward_decoder(hidden_states_out)
-            return x_loc, x_loc_feat, x_rec, x_atlas
+            x_atlas = self.forward_decoder(hidden_states_out)
+            return x_loc, x_loc_feat, x_atlas
         else:
             raise ValueError("Type must be global or local")
         
