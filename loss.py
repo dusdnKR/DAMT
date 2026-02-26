@@ -1,13 +1,16 @@
 import torch
+import torch.nn as nn
 from torch.nn import functional as F
 from monai.losses import DiceLoss, DiceCELoss
 
-class Contrast(torch.nn.Module):
+
+class Contrast(nn.Module):
+    """NT-Xent contrastive loss (SimCLR-style)."""
     def __init__(self, args, batch_size, temperature=0.5):
         super().__init__()
         device = torch.device(f"cuda:{args.local_rank}")
         self.batch_size = batch_size
-        self.register_buffer("temp", torch.tensor(temperature).to(torch.device(f"cuda:{args.local_rank}")))
+        self.register_buffer("temp", torch.tensor(temperature).to(device))
         self.register_buffer("neg_mask", (~torch.eye(batch_size * 2, batch_size * 2, dtype=bool).to(device)).float())
 
     def forward(self, x_i, x_j):
@@ -23,7 +26,63 @@ class Contrast(torch.nn.Module):
         return torch.sum(-torch.log(nom / torch.sum(denom, dim=1))) / (2 * self.batch_size)
 
 
-class WeightedMSELoss(torch.nn.Module):
+class AutoWeightedLoss(nn.Module):
+    """Uncertainty-based automatic multi-task loss weighting.
+
+    Learns a log-variance parameter per task so that
+        total = sum_i  exp(-log_var_i) * loss_i  +  log_var_i
+
+    Reference: Kendall et al., "Multi-task learning using uncertainty to
+    weigh losses for scene geometry and semantics", CVPR 2018.
+
+    Args:
+        task_names: Ordered list of task name strings.  The same order must
+            be used when passing losses to ``forward()``.
+    """
+
+    TASK_NAMES = ["rot", "loc", "contrastive", "atlas", "feat", "texture", "mim"]
+
+    def __init__(self, task_names=None):
+        super().__init__()
+        if task_names is None:
+            task_names = self.TASK_NAMES
+        self.task_names = list(task_names)
+        n = len(self.task_names)
+        # Initialise log-variances to 0  →  initial weight = exp(0) = 1
+        self.log_vars = nn.Parameter(torch.zeros(n))
+
+    def forward(self, loss_dict: dict):
+        """Compute the weighted total loss.
+
+        Args:
+            loss_dict: ``{task_name: scalar_loss}`` for every active task.
+                Values that are ``0`` (int) are treated as inactive and skipped.
+
+        Returns:
+            total_loss: Weighted scalar loss for back-propagation.
+            weighted_dict: ``{task_name: weighted_loss_value}`` for logging.
+        """
+        total = torch.tensor(0.0, device=self.log_vars.device)
+        weighted_dict = {}
+        for i, name in enumerate(self.task_names):
+            raw = loss_dict.get(name, 0)
+            if isinstance(raw, (int, float)) and raw == 0:
+                weighted_dict[name] = 0.0
+                continue
+            precision = torch.exp(-self.log_vars[i])
+            w_loss = precision * raw + self.log_vars[i]
+            total = total + w_loss
+            weighted_dict[name] = w_loss.item()
+        return total, weighted_dict
+
+    def get_weights(self):
+        """Return current effective weights (exp(-log_var)) as a dict."""
+        with torch.no_grad():
+            weights = torch.exp(-self.log_vars)
+        return {name: weights[i].item() for i, name in enumerate(self.task_names)}
+
+
+class WeightedMSELoss(nn.Module):
     def __init__(self, args, weight=None):
         super().__init__()
         device = torch.device(f"cuda:{args.local_rank}")
@@ -38,38 +97,3 @@ class WeightedMSELoss(torch.nn.Module):
         else:
             loss = ((inputs - targets)**2).mean()
         return loss
-
-
-class Loss(torch.nn.Module):
-    def __init__(self, batch_size, args):
-        super().__init__()
-        self.rot_loss = torch.nn.CrossEntropyLoss()
-        self.loc_loss = torch.nn.CrossEntropyLoss()
-        self.recon_loss = torch.nn.L1Loss()
-        self.contrast_loss = Contrast(args, batch_size)
-        self.atlas_loss = DiceCELoss(to_onehot_y=True, softmax=True) 
-        self.feat_loss = torch.nn.MSELoss()
-        self.texture_loss = torch.nn.MSELoss()
-
-        self.alpha1 = 1.0
-        self.alpha2 = 1.0
-        self.alpha3 = 1.0
-        self.alpha4 = 1.0
-        self.alpha5 = 0.2
-        self.alpha6 = 1.0
-        self.alpha7 = 1.0
-
-    def __call__(self, output_rot, target_rot, output_loc, target_loc, output_recons, target_recons, output_recons2, target_recons2, 
-                    output_contrastive, target_contrastive, output_glo_atlas, target_glo_atlas, output_loc_atlas, target_loc_atlas, 
-                    output_feat, target_feat, output_texture, target_texture):
-        rot_loss = self.alpha1 * self.rot_loss(output_rot, target_rot)
-        loc_loss = self.alpha2 * self.loc_loss(output_loc, target_loc)
-        recon_loss = self.alpha3 * (self.recon_loss(output_recons, target_recons) + self.recon_loss(output_recons2, target_recons2))
-        contrast_loss = self.alpha4 * self.contrast_loss(output_contrastive, target_contrastive)
-        atlas_loss = self.alpha5 * (self.atlas_loss(output_glo_atlas, target_glo_atlas) + self.atlas_loss(output_loc_atlas, target_loc_atlas))
-        feat_loss = self.alpha6 * self.feat_loss(output_feat, target_feat)
-        texture_loss = self.alpha7 * self.texture_loss(output_texture, target_texture)
-            
-        total_loss = rot_loss + loc_loss + recon_loss + contrast_loss + atlas_loss + feat_loss + texture_loss
-
-        return total_loss, (rot_loss, loc_loss, contrast_loss, recon_loss, atlas_loss, feat_loss, texture_loss)

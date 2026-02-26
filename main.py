@@ -23,8 +23,7 @@ from datasets import get_brain_dataet
 # from trainer import Trainer
 from models import SSLHead_Swin
 from monai import transforms
-from monai.losses import DiceLoss, DiceCELoss
-from loss import Loss, Contrast
+from loss import AutoWeightedLoss, Contrast
 from ops import rot_rand, aug_rand, get_atlas_mask, get_feature_mask
 import utils
 import warnings
@@ -246,8 +245,10 @@ def main():
                                                 find_unused_parameters=True)
     
     ############## Load from checkpoint if exists, otherwise from model ###############
-    loss_function = Loss(args.batch_size_per_gpu, args).cuda()
+    loss_function = AutoWeightedLoss().cuda()
     params_groups = utils.get_params_groups(model)
+    # Add AutoWeightedLoss learnable log-variance params to the optimizer
+    params_groups.append({"params": loss_function.parameters(), "lr_scale": 1.0})
     optimizer = torch.optim.AdamW(params_groups)
     lr_schedule = utils.cosine_scheduler(
         args.lr * (args.batch_size_per_gpu * utils.get_world_size()) / 256, #256.,  # linear scaling rule
@@ -291,6 +292,7 @@ def main():
         save_dict = {
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
+            'loss_function': loss_function.state_dict(),
             'epoch': epoch + 1,
             'args': args,
         }
@@ -312,12 +314,12 @@ def main():
 def train_one_epoch(model, loss_function, data_loader, optimizer, 
                         lr_schedule, wd_schedule, epoch, fp16_scaler, args):
 
-        loss_rot = torch.nn.CrossEntropyLoss()
-        loss_loc = torch.nn.CrossEntropyLoss()
-        loss_contrast = Contrast(args, args.batch_size_per_gpu)
-        loss_atlas = torch.nn.CrossEntropyLoss()
-        loss_feat = torch.nn.L1Loss()
-        loss_texture = torch.nn.L1Loss() # torch.nn.MSELoss()
+        criterion_rot = torch.nn.CrossEntropyLoss()
+        criterion_loc = torch.nn.CrossEntropyLoss()
+        criterion_contrast = Contrast(args, args.batch_size_per_gpu)
+        criterion_atlas = torch.nn.CrossEntropyLoss()
+        criterion_feat = torch.nn.L1Loss()
+        criterion_texture = torch.nn.L1Loss()
 
         metric_logger = utils.MetricLogger(delimiter="  ")
         header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
@@ -380,16 +382,27 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 rot_p = torch.cat([rot1_p, rot2_p], dim=0)
                 rot = torch.cat([rot1, rot2], dim=0)
 
-                # # compute loss
-                rot_loss = loss_rot(rot_p, rot)
-                loc_loss = loss_loc(loc_p, loc_trues)
-                contrastive_loss = loss_contrast(contrastive1_p, contrastive2_p)
-                glo_atlas_loss = loss_atlas(glo_atlas_p, glo_atlas.squeeze(1).long()) if glo_atlas.sum() != 0 else 0
-                loc_atlas_loss = loss_atlas(loc_atlas_p, loc_atlas.squeeze(1).long()) if loc_atlas.sum() != 0 else 0
+                # compute per-task raw losses
+                rot_loss = criterion_rot(rot_p, rot)
+                loc_loss = criterion_loc(loc_p, loc_trues)
+                contrastive_loss = criterion_contrast(contrastive1_p, contrastive2_p)
+                glo_atlas_loss = criterion_atlas(glo_atlas_p, glo_atlas.squeeze(1).long()) if glo_atlas.sum() != 0 else 0
+                loc_atlas_loss = criterion_atlas(loc_atlas_p, loc_atlas.squeeze(1).long()) if loc_atlas.sum() != 0 else 0
                 atlas_loss = 0.5 * (glo_atlas_loss + loc_atlas_loss)
-                feat_loss = 5 * loss_feat(glo_feat_p, glo_feat) if glo_feat.sum() != 0 else 0
-                texture_loss = 5 * loss_texture(texture_p, glo_radi) if glo_radi.sum() != 0 else 0
-                loss = rot_loss + loc_loss +  contrastive_loss + feat_loss + texture_loss + atlas_loss + mim_loss
+                feat_loss = criterion_feat(glo_feat_p, glo_feat) if glo_feat.sum() != 0 else 0
+                texture_loss = criterion_texture(texture_p, glo_radi) if glo_radi.sum() != 0 else 0
+
+                # auto-weighted multi-task loss
+                raw_losses = {
+                    "rot": rot_loss,
+                    "loc": loc_loss,
+                    "contrastive": contrastive_loss,
+                    "atlas": atlas_loss,
+                    "feat": feat_loss,
+                    "texture": texture_loss,
+                    "mim": mim_loss,
+                }
+                loss, weighted_losses = loss_function(raw_losses)
 
 
             if not math.isfinite(loss.item()):
@@ -413,11 +426,29 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
+            # per-task loss monitoring
+            metric_logger.update(
+                rot_loss=rot_loss.item() if isinstance(rot_loss, torch.Tensor) else rot_loss,
+                loc_loss=loc_loss.item() if isinstance(loc_loss, torch.Tensor) else loc_loss,
+                contrastive_loss=contrastive_loss.item() if isinstance(contrastive_loss, torch.Tensor) else contrastive_loss,
+                atlas_loss=atlas_loss.item() if isinstance(atlas_loss, torch.Tensor) else 0,
+                feat_loss=feat_loss.item() if isinstance(feat_loss, torch.Tensor) else 0,
+                texture_loss=texture_loss.item() if isinstance(texture_loss, torch.Tensor) else 0,
+                mim_loss=mim_loss.item() if isinstance(mim_loss, torch.Tensor) else 0,
+            )
 
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
         print("\nAveraged stats:", metric_logger, "\n")
-        return {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        # log learned task weights from AutoWeightedLoss
+        if utils.is_main_process():
+            task_weights = loss_function.get_weights()
+            print("AutoWeightedLoss effective weights:", 
+                  {k: f"{v:.4f}" for k, v in task_weights.items()})
+        stats = {k: meter.global_avg for k, meter in metric_logger.meters.items()}
+        if utils.is_main_process():
+            stats.update({f"w_{k}": v for k, v in task_weights.items()})
+        return stats
 
 
 class MaskGenerator:
