@@ -1,12 +1,10 @@
-import os
-import sys
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from einops import rearrange, repeat
-from monai.networks.blocks import PatchEmbed, UnetOutBlock, UnetrBasicBlock, UnetrUpBlock
+from einops import rearrange
+from monai.networks.blocks import UnetOutBlock
 from monai.networks.layers.utils import get_act_layer, get_norm_layer
 from monai.networks.blocks.convolutions import Convolution
 from monai.networks.layers.factories import Act, Norm
@@ -80,8 +78,6 @@ class SSLHead_Swin(nn.Module):
             PixelShuffle3d(32),
         )
         self.patch_size = 2
-
-        self.conv =  nn.Conv3d(dim // 16, 1, kernel_size=1, stride=1)
         self.out = UnetOutBlock(spatial_dims=3, in_channels=feature_size, out_channels=101)
 
     def encode(self, x):
@@ -306,41 +302,6 @@ class EncoderBlock(nn.Module):
         return out
 
 
-class TrUpBlock(nn.Module):
-    """
-    An upsampling module that can be used for UNETR: "Hatamizadeh et al.,
-    UNETR: Transformers for 3D Medical Image Segmentation <https://arxiv.org/abs/2103.10504>"
-    """
-
-    def __init__(
-        self,
-        spatial_dims: int,
-        in_channels: int,
-        out_channels: int,
-        upsample_kernel_size: Union[Sequence[int], int],
-    ) -> None:
-
-
-        super().__init__()
-        upsample_stride = upsample_kernel_size
-        self.transp_conv = get_conv_layer(
-            spatial_dims,
-            in_channels,
-            out_channels,
-            kernel_size=upsample_kernel_size,
-            stride=upsample_stride,
-            conv_only=True,
-            is_transposed=True,
-        )
-
-    def forward(self, inp):
-        out = self.transp_conv(inp)
-
-        return out
-
-
-
-
 def get_conv_layer(
     spatial_dims: int,
     in_channels: int,
@@ -402,78 +363,3 @@ def get_output_padding(
     out_padding = tuple(int(p) for p in out_padding_np)
 
     return out_padding if len(out_padding) > 1 else out_padding[0]
-
-
-
-
-
-class JigsawHead(nn.Module):
-    def __init__(
-        self,
-        in_dims: int,
-        hid_dims: int=128,
-        out_dims: int=1000,
-    ) -> None:
-
-        super().__init__()
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.flatten = nn.Flatten(1)
-        self.fc = nn.Linear(in_dims, hid_dims)
-        self.classifier = nn.Linear(hid_dims * 16, out_dims)
-
-    def forward(self, x):
-        bs = x.shape[0]
-
-        # 256 256 768 -> 256 768 16 16
-        x = rearrange(x, "b (i j) e-> b e i j", i=16, j=16) # batch, patch, embedding
-
-        # 256 768 16 16 -> 256 768 16 4 4
-        x = rearrange(x, "b e (i w) (j h) -> b e (i j) w h", i=4, j=4) 
-        # 256 768 16 4 4 -> 256 768 16
-        x = self.avgpool(x).squeeze() 
-        # 256 768 16 -> 256 16 768
-        x = rearrange(x, "b e p -> b p e") 
-        # 256 16 768 -> 256 16 128
-        x = self.fc(x) 
-        # 256 16 128 -> 256 2048
-        x = self.flatten(x) 
-        # 256 2048 -> 256 1000
-        x = self.classifier(x.view(bs, -1))
-
-        return x
-
-class RotationHead(nn.Module):
-    def __init__(
-        self,
-        in_dims: int,
-        hid_dims: int,
-        out_dims: int,
-    ) -> None:
-
-        super().__init__()
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-        self.flatten = nn.Flatten(1)
-        self.fc = nn.Linear(in_dims, hid_dims)
-        self.classifier = nn.Linear(hid_dims * 16, out_dims)
-
-    def forward(self, x):
-        bs = x.shape[0]
-        # 256 768 16 16 -> 256 768 16 4 4
-        x = rearrange(x, "b e (i w) (j h) -> b e (i j) w h", i=4, j=4) 
-        # 256 768 16 4 4 -> 256 768 16
-        x = self.avgpool(x).squeeze() 
-        # 256 768 16 -> 256 16 768
-        x = rearrange(x, "b e p -> b p e") 
-        # 256 16 768 -> 256 16 128
-        x = self.fc(x) 
-        # 256 16 128 -> 256 2048
-        x = self.flatten(x) 
-        # 256 2048 -> 256 1000
-        x = self.classifier(x.view(bs, -1))
-
-        return x
-    
-
-

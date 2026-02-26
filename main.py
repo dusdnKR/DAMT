@@ -1,43 +1,24 @@
 import os
-import sys
 import numpy as np
 import random
 import argparse
 import datetime
 import time
 import math
-import SimpleITK as sitk
-import scipy.stats as stats
-# import tensorflow # needs to call tensorflow before torch, otherwise crush
 import json
 from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from timm.optim import create_optimizer
-from timm.utils import NativeScaler
-from timm.scheduler import create_scheduler
-from timm.utils import accuracy
 
 from datasets import get_brain_dataet
-# from trainer import Trainer
 from models import SSLHead_Swin
 from monai import transforms
 from loss import AutoWeightedLoss, Contrast
-from ops import rot_rand, aug_rand, get_atlas_mask, get_feature_mask
+from ops import rot_rand
 import utils
 import warnings
 warnings.filterwarnings(action='ignore')
-
-
-def seed_everything(seed):
-    random.seed(seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-    torch.backends.cudnn.deterministic = True
 
 
 def get_argparser():
@@ -184,26 +165,6 @@ def get_argparser():
     
     return args
 
-
-def maybe_mkdir(path):
-    try:
-        os.mkdir(path)
-    except:
-        pass
-
-def save_nifti(image, prefix, index):
-    
-    path = f"save/{index}"
-    maybe_mkdir(path)
-
-    if prefix == "glo_par_P" or prefix == "loc_par_P":
-        image = torch.argmax(image, axis=0)
-
-    image = image.detach().cpu().numpy().squeeze()
-    image = np.float32(image)
-    img = sitk.GetImageFromArray(image)
-
-    sitk.WriteImage(img, f"{path}/{prefix}.nii.gz")
 
 def remove_zerotensor(tensor_p, tensor):
     tensor_p_list = []
@@ -515,12 +476,6 @@ class DataAugmentation(object):
             ]
         )
         
-        color_jitter = transforms.Compose(
-            [
-                transforms.RandScaleIntensityd(keys="image", factors=0.2, prob=0.2),
-                transforms.RandShiftIntensityd(keys="image", offsets=0.2, prob=0.2),
-            ]
-        )
         # global crop
         self.global_transfo = transforms.Compose([
             transforms.RandSpatialCropd( keys=["image", "label"], roi_size=(128, 128, 128), random_size=False, allow_missing_keys=True), # 128

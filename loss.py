@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
-from monai.losses import DiceLoss, DiceCELoss
 
 
 class Contrast(nn.Module):
@@ -80,20 +79,3 @@ class AutoWeightedLoss(nn.Module):
         with torch.no_grad():
             weights = torch.exp(-self.log_vars)
         return {name: weights[i].item() for i, name in enumerate(self.task_names)}
-
-
-class WeightedMSELoss(nn.Module):
-    def __init__(self, args, weight=None):
-        super().__init__()
-        device = torch.device(f"cuda:{args.local_rank}")
-        self.weight = weight
-        if weight is not None:
-            self.weight = self.weight.to(device)
-
-    def forward(self, inputs, targets):
-        if self.weight is not None:
-            assert inputs[1].shape == self.weight.shape, "Inputs and weight must have the same shape"
-            loss = ((inputs - targets)**2 * self.weight).mean()
-        else:
-            loss = ((inputs - targets)**2).mean()
-        return loss
