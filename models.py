@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from einops import rearrange
 from monai.networks.blocks import UnetOutBlock
 from monai.networks.layers.utils import get_act_layer, get_norm_layer
 from monai.networks.blocks.convolutions import Convolution
@@ -38,15 +37,10 @@ class SSLHead_Swin(nn.Module):
             use_checkpoint=True,
             spatial_dims=3,
         ).to(args.device)
-        self.rotation_pre = nn.Identity()
         self.rotation_head = nn.Linear(dim, 10)
-        self.location_pre = nn.Identity()
         self.location_head = nn.Linear(dim, 9)
-        self.contrastive_pre = nn.Identity()
         self.contrastive_head = nn.Linear(dim, 512)
         self.avgpool = nn.AdaptiveAvgPool3d(1)
-        self.feature_pre = nn.Identity()
-        self.texture_pre = nn.Identity()
         self.glo_feat_head = nn.Sequential(
             nn.Conv3d(dim, 32, 1),
             nn.InstanceNorm3d(32),
@@ -129,61 +123,23 @@ class SSLHead_Swin(nn.Module):
     
     
     def forward_rot(self, cls_token):
-        x_rot_pre = self.rotation_pre(cls_token)
-        x_rot = self.rotation_head(x_rot_pre)
-        return x_rot
-    
-    def forward_loc(self, cls_token):
-        x_loc_pre = self.location_pre(cls_token)
-        x_loc = self.location_head(x_loc_pre)
-        return x_loc
-    
-    def forward_contrastive(self, cls_token):
-        x_contrastive_pre = self.contrastive_pre(cls_token)
-        x_contrastive = self.contrastive_head(x_contrastive_pre)
-        return x_contrastive
-    
-    def forward_texture(self, x4):
-        x_texture = self.texture_pre(x4)
-        x_texture = self.texture_head(x_texture)
-        return x_texture
-    
-    def forward_global(self, x4):
-        x_glo_feat = self.feature_pre(x4)
-        x_glo_feat = self.glo_feat_head(x_glo_feat)
-        return x_glo_feat
-    
-    def forward_local(self, x4):
-        x_loc_feat = self.feature_pre(x4)
-        x_loc_feat = self.loc_feat_head(x_loc_feat)
-        return x_loc_feat
-    
-    def forward_decoder(self, hidden_states_out):
-        x_upsample = self.decoder(hidden_states_out)    
-        # x_rec = self.conv(x_upsample)
-        x_atlas = self.out(x_upsample)
-        return x_atlas
+        return self.rotation_head(cls_token)
 
-    def forward(self, x, type):
-        hidden_states_out, cls_token = self.encode(x)
-        if type == "global":
-            x_rot = self.forward_rot(cls_token)
-            x_contrastive = self.forward_contrastive(cls_token)
-            x_texture = self.forward_texture(hidden_states_out[4])
-            x_glo_feat = self.forward_global(hidden_states_out[4])
-            x_atlas = self.forward_decoder(hidden_states_out)
-            return x_rot, x_contrastive, x_texture, x_glo_feat, x_atlas
-        elif type == "global2":
-            x_rot = self.forward_rot(cls_token)
-            x_contrastive = self.forward_contrastive(cls_token)
-            return x_rot, x_contrastive
-        elif type == "local":
-            x_loc = self.forward_loc(cls_token)
-            x_loc_feat = self.forward_local(hidden_states_out[4])
-            x_atlas = self.forward_decoder(hidden_states_out)
-            return x_loc, x_loc_feat, x_atlas
-        else:
-            raise ValueError("Type must be global or local")
+    def forward_loc(self, cls_token):
+        return self.location_head(cls_token)
+
+    def forward_contrastive(self, cls_token):
+        return self.contrastive_head(cls_token)
+
+    def forward_texture(self, x4):
+        return self.texture_head(x4)
+
+    def forward_global(self, x4):
+        return self.glo_feat_head(x4)
+
+    def forward_decoder(self, hidden_states_out):
+        x_upsample = self.decoder(hidden_states_out)
+        return self.out(x_upsample)
         
 class PixelShuffle3d(nn.Module):
     '''

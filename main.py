@@ -1,6 +1,5 @@
 import os
 import numpy as np
-import random
 import argparse
 import datetime
 import time
@@ -25,142 +24,43 @@ warnings.filterwarnings(action='ignore')
 def get_argparser():
     parser = argparse.ArgumentParser(description='Argparser')
 
-    # Model parameters
-    parser.add_argument('--drop', type=float, default=0.1, metavar='PCT',
-                        help='Dropout rate (default: 0.1)')
-    parser.add_argument('--drop-path', type=float, default=0.1, metavar='PCT',
-                        help='Drop path rate (default: 0.1)')
-    parser.add_argument('--input-size', default=256, type=int, help='images input size')
-    parser.add_argument('--model-ema', action='store_true')
-    parser.add_argument('--no-model-ema', action='store_false', dest='model_ema')
-    parser.set_defaults(model_ema=True)
-    parser.add_argument('--model-ema-decay', type=float, default=0.99996, help='')
-
     # Optimizer parameters
-    parser.add_argument('--opt', default='adamw', type=str, metavar='OPTIMIZER',
-                        help='Optimizer (default: "adamw"')
-    parser.add_argument('--opt-eps', default=1e-8, type=float, metavar='EPSILON',
-                        help='Optimizer Epsilon (default: 1e-8)')
-    parser.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
-                        help='Optimizer Betas (default: None, use opt default)')
-    parser.add_argument('--clip-grad', type=float, default=1.0, metavar='NORM',
-                        help='Clip gradient norm (default: 1.0)')
-    parser.add_argument('--momentum', type=float, default=0.9, metavar='M',
-                        help='SGD momentum (default: 0.9)')
-    parser.add_argument('--weight-decay', type=float, default=0.05,
-                        help='weight decay (default: 0.05)')
-
-    # Learning rate schedule parameters
-    parser.add_argument('--unscale-lr', action='store_true')
-    parser.add_argument('--sched', default='cosine', type=str, metavar='SCHEDULER',
-                        help='LR scheduler (default: "cosine"')
-    parser.add_argument('--lr', type=float, default=5e-4, metavar='LR',
-                        help='learning rate (default: 5e-4)')
-    parser.add_argument('--lr-noise', type=float, nargs='+', default=None, metavar='pct, pct',
-                        help='learning rate noise on/off epoch percentages')
-    parser.add_argument('--lr-noise-pct', type=float, default=0.67, metavar='PERCENT',
-                        help='learning rate noise limit percent (default: 0.67)')
-    parser.add_argument('--lr-noise-std', type=float, default=1.0, metavar='STDDEV',
-                        help='learning rate noise std-dev (default: 1.0)')
-    parser.add_argument('--warmup-lr', type=float, default=1e-6, metavar='LR',
-                        help='warmup learning rate (default: 1e-6)')
-    parser.add_argument('--min-lr', type=float, default=1e-7, metavar='LR',
-                        help='lower lr bound for cyclic schedulers that hit 0 (1e-6)')
-
-    parser.add_argument('--decay-epochs', type=float, default=30, metavar='N',
-                        help='epoch interval to decay LR')
-    parser.add_argument('--warmup-epochs', type=int, default=5, metavar='N',
-                        help='epochs to warmup LR, if scheduler supports')
-    parser.add_argument('--cooldown-epochs', type=int, default=10, metavar='N',
-                        help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
-    parser.add_argument('--patience-epochs', type=int, default=10, metavar='N',
-                        help='patience epochs for Plateau LR scheduler (default: 10')
-    parser.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
-                        help='LR decay rate (default: 0.1)')
-
-
-    # Augmentation parameters
-    parser.add_argument('--color-jitter', type=float, default=0.3, metavar='PCT',
-                        help='Color jitter factor (default: 0.3)')
-    parser.add_argument('--aa', type=str, default='rand-m9-mstd0.5-inc1', metavar='NAME',
-                        help='Use AutoAugment policy. "v0" or "original". " + \
-                             "(default: rand-m9-mstd0.5-inc1)'),
-    parser.add_argument('--smoothing', type=float, default=0.1, help='Label smoothing (default: 0.1)')
-    parser.add_argument('--train-interpolation', type=str, default='bicubic',
-                        help='Training interpolation (random, bilinear, bicubic default: "bicubic")')
-
-    parser.add_argument('--repeated-aug', action='store_true')
-    parser.add_argument('--no-repeated-aug', action='store_false', dest='repeated_aug')
-    parser.set_defaults(repeated_aug=True)
-    
-    parser.add_argument('--train-mode', action='store_true')
-    parser.add_argument('--no-train-mode', action='store_false', dest='train_mode')
-    parser.set_defaults(train_mode=True)
-    
-    parser.add_argument('--ThreeAugment', action='store_true') #3augment
-    parser.add_argument('--src', action='store_true') #simple random crop
-    
-    # * Random Erase params
-    parser.add_argument('--reprob', type=float, default=0.25, metavar='PCT',
-                        help='Random erase prob (default: 0.25)')
-    parser.add_argument('--remode', type=str, default='pixel',
-                        help='Random erase mode (default: "pixel")')
-    parser.add_argument('--recount', type=int, default=1,
-                        help='Random erase count (default: 1)')
-    parser.add_argument('--resplit', action='store_true', default=False,
-                        help='Do not random erase first (clean) augmentation split')
+    parser.add_argument('--clip-grad', type=float, default=1.0,
+                        help='Gradient norm clipping (0 to disable, default: 1.0)')
+    parser.add_argument('--lr', type=float, default=5e-4, help='learning rate (default: 5e-4)')
+    parser.add_argument('--min-lr', type=float, default=1e-7, help='minimum learning rate')
+    parser.add_argument('--warmup-epochs', type=int, default=5, help='epochs to warmup LR')
 
     # Dataset parameters
-    parser.add_argument('--epochs', type=int, default = 301, help = '# of epochs')
-    parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
-                    help='start epoch')
-    parser.add_argument('--device', default='cuda', help='device to use for training / testing')
-    parser.add_argument('--nb-classes', type=int, default=1000, help='# of classes')
-    parser.add_argument('--seed', type=int, default = 42, help = 'random seed')
-    parser.add_argument('--batch-size', type=int, default = 4, help = 'batch size')
-    
-    parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
-    parser.add_argument('--eval-crop-ratio', default=0.875, type=float, help="Crop ratio for evaluation")    
+    parser.add_argument('--epochs', type=int, default=301, help='# of epochs')
+    parser.add_argument('--device', default='cuda', help='device to use for training')
+    parser.add_argument('--seed', type=int, default=42, help='random seed')    
     parser.add_argument('--num_workers', type=int, default=8)
-    parser.add_argument('--pin-mem', action='store_true',
-                        help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
-    parser.add_argument('--no-pin-mem', action='store_false', dest='pin_mem',help='')
-    parser.set_defaults(pin_mem=True)
-
     parser.add_argument('--batch_size_per_gpu', default=2, type=int,
-        help='Per-GPU batch-size : number of distinct images loaded on one GPU.')
-    parser.add_argument('--local_crops_number', type=int, default=0, help="""Number of small
-            local views to generate. Set this parameter to 0 to disable multi-crop training.
-            When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)
-    parser.add_argument('--loc_patch_crops_number', type=int, default=1, help="""Number of small
-            location patch views to generate. Set this parameter to 0 to disable multi-crop training.
-            When disabling multi-crop we recommend to use "--global_crops_scale 0.14 1." """)        
-    parser.add_argument('--saveckp_freq', default=20, type=int, help='Save checkpoint every x epochs.')
-    parser.add_argument('--use_fp16', type=utils.bool_flag, default=True, help="""Whether or not
-        to use half precision for training. Improves training time and memory requirements,
-        but can provoke instability and slight decay of performance. We recommend disabling
-        mixed precision if the loss is unstable, if reducing the patch size or if training with bigger ViTs.""")    
-    parser.add_argument('--weight_decay', type=float, default=0.04, help="""Initial value of the
-        weight decay. With ViT, a smaller value at the beginning of training works well.""")
-    parser.add_argument('--weight_decay_end', type=float, default=0.4, help="""Final value of the
-        weight decay. We use a cosine schedule for WD and using a larger decay by
-        the end of training improves performance for ViTs.""")
-    parser.add_argument('--freeze_last_layer', default=1, type=int, help="""Number of epochs
-        during which we keep the output layer fixed. Typically doing so during
-        the first epoch helps training. Try increasing this value if the loss does not decrease.""")
-    parser.add_argument('--project', type=str, default="self-supervised-learning")
-    parser.add_argument('--data-path', type=str, default="/NFS/Users/kimyw/data/fomo60k_wo_scz")
-    parser.add_argument('--data-type', type=str, default="OG")
-    parser.add_argument('--name', type=str, default="ssl")
-    parser.add_argument("--local_rank", type=int, default=0, help="local rank")
-    parser.add_argument("--local-rank", type=int, default=0, help="local rank")
-    parser.add_argument("--in-channels", type=int, default=1, help="in channels")
-    parser.add_argument('--type', type=str, default="rot")
-    parser.add_argument('--model', type=str, default="swin")
-    parser.add_argument("--dist_url", default="env://", type=str, help="""url used to set up
-        distributed training; see https://pytorch.org/docs/stable/distributed.html""")
+        help='Per-GPU batch-size')
+    parser.add_argument('--local_crops_number', type=int, default=0)
+    parser.add_argument('--loc_patch_crops_number', type=int, default=1)
+    parser.add_argument('--saveckp_freq', default=20, type=int,
+        help='Save checkpoint every x epochs')
+    parser.add_argument('--use_fp16', type=utils.bool_flag, default=True,
+        help='Mixed precision training')
+    parser.add_argument('--weight_decay', type=float, default=0.04,
+        help='Initial weight decay')
+    parser.add_argument('--weight_decay_end', type=float, default=0.4,
+        help='Final weight decay (cosine schedule)')
+    parser.add_argument('--freeze_last_layer', default=1, type=int,
+        help='Freeze output layer for first N epochs')
+
+    # Paths & identifiers
+    parser.add_argument('--project', type=str, default='self-supervised-learning')
+    parser.add_argument('--data-path', type=str, default='/NFS/Users/kimyw/data/fomo60k_wo_scz')
+    parser.add_argument('--name', type=str, default='ssl')
+    parser.add_argument('--local_rank', type=int, default=0)
+    parser.add_argument('--local-rank', type=int, default=0)
+    parser.add_argument('--in-channels', type=int, default=1)
+    parser.add_argument('--dist_url', default='env://')
     parser.add_argument('--output_dir', default='./runs_dict',
-                            help='path where to save, empty for no saving')
+        help='path where to save')
 
     args = parser.parse_args()
     
@@ -168,17 +68,11 @@ def get_argparser():
 
 
 def remove_zerotensor(tensor_p, tensor):
-    tensor_p_list = []
-    tensor_list = []
-    for i in range(tensor.shape[0]):
-        if tensor[i].sum() != 0:
-            tensor_list.append(tensor[i])
-            tensor_p_list.append(tensor_p[i])
-
-    tensor_p = torch.stack(tensor_p_list) if tensor_p_list else torch.tensor([])
-    tensor = torch.stack(tensor_list) if tensor_list else torch.tensor([])
-
-    return tensor_p.cuda(non_blocking=True), tensor.cuda(non_blocking=True)
+    """Remove samples whose target tensor is all-zero (vectorised)."""
+    mask = tensor.flatten(1).any(dim=1)  # (B,) bool
+    if mask.any():
+        return tensor_p[mask], tensor[mask]
+    return torch.tensor([], device=tensor.device), torch.tensor([], device=tensor.device)
 
 
 def main():
@@ -394,6 +288,9 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 optimizer.step()
             else:
                 fp16_scaler.scale(loss).backward()
+                if args.clip_grad:
+                    fp16_scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.clip_grad)
                 utils.cancel_gradients_last_layer(epoch, model,
                                                 args.freeze_last_layer)
                 fp16_scaler.step(optimizer)

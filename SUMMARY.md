@@ -438,7 +438,7 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 | mim | 1.05 |
 | **total** | **265.17** |
 
-> texture_loss가 높은 이유: 정규화되지 않은 radiomics 특성의 스케일 차이. AutoWeightedLoss가 자동으로 가중치를 조정할 것으로 예상.
+> texture_loss가 높은 이유: ~~정규화되지 않은 radiomics 특성의 스케일 차이.~~ Session 8에서 z-score 표준화 적용하여 해결.
 
 ---
 
@@ -446,14 +446,30 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 
 1. ~~**`loss.py`의 `Loss` 클래스는 현재 미사용**~~: Session 5에서 삭제됨. `AutoWeightedLoss`로 대체.
 
-2. **NaN 배치**: FP16 학습에서 에폭당 ~2개 배치에서 NaN loss가 발생한다. 현재는 해당 배치를 건너뛰는 방식으로 처리 중이며, 학습 안정성에는 영향 없다.
+2. ~~**NaN 배치**~~: Session 8에서 gradient clipping (`clip_grad=1.0`) 적용. FP16 학습 시 gradient 폭주로 인한 NaN이 크게 감소할 것으로 예상.
 
-3. ~~**`datasets.py` 경로 하드코딩**~~: Session 6에서 `--data-path` 인자 기본값을 fomo60k_wo_scz로 수정. `args.data_path`를 사용.
+3. ~~**`datasets.py` 경로 하드코딩**~~: Session 6에서 수정.
 
-4. **`trainer.py` 미사용**: import 어디에서도 되지 않으며, 삭제 후보.
+4. ~~**`trainer.py` 미사용**~~: Session 8에서 삭제.
 
-5. **Feature NaN 값**: 정규화 과정에서 분산이 0인 열에 NaN 발생 (global: ~26K, local: ~7.5K). `fillna(0)` + `nan_to_num()`으로 처리.
+5. **Feature NaN 값**: 정규화 과정에서 분산이 0인 열에 NaN 발생. `fillna(0)` + `nan_to_num()`으로 처리.
 
-6. **W&B 모니터링**: `wandb` 패키지 설치 필요. main.py에서 rank 0에서만 init/log/finish 호출.
+6. **W&B 모니터링**: epoch-level (`epoch/*`) + iteration-level (`iter/*`, 100 iter마다) 듀얼 로깅. Session 8에서 iteration 로깅 추가.
 
-7. **Contrastive Loss 동적 배치 처리** (Session 7에서 수정): `Contrast` 클래스의 `neg_mask`가 고정 `batch_size`로 사전 계산되어, 에폭 마지막 배치(9153/4=2288.25 → 나머지 배치)에서 차원 불일치 RuntimeError 발생. `forward()`에서 `N = z_i.shape[0]`으로 동적 계산하도록 수정하여 가변 배치 크기를 지원. (commit: c37c31c)
+7. ~~**Contrastive Loss 동적 배치 처리**~~: Session 7에서 수정 완료. (commit: c37c31c)
+
+---
+
+## 10. Session 8 리팩토링 요약
+
+| 변경 | 파일 | 설명 |
+|------|------|------|
+| **Gradient clipping** | main.py | `clip_grad=1.0` 활성화. FP16 scaler 사용 시 `unscale_()` 후 `clip_grad_norm_()` 적용 → NaN 배치 감소 |
+| **Radiomics z-score** | datasets.py | radiomics_texture per-column 표준화 → texture_loss 252→1.1 (97% 감소) |
+| **Iteration W&B 로깅** | main.py | 100 iter마다 `iter/*` 메트릭 로깅 + epoch 로깅을 `epoch/*` 네임스페이스로 분리 |
+| **`remove_zerotensor` 벡터화** | main.py | Python for-loop → `tensor.flatten(1).any(dim=1)` boolean indexing |
+| **`rot_rand` 리팩토링** | ops.py | 10-way if-elif → `_ROT_TABLE` lookup (4줄 → 2줄) |
+| **Argparser 정리** | main.py | DeiT/DINO 잔여 파라미터 ~20개 제거 (585→497줄) |
+| **`nn.Identity` 제거** | models.py | 5개 무의미한 pre-layer + 미사용 `forward()`, `forward_local()` 삭제 |
+| **`trainer.py` 삭제** | — | 148줄 데드코드 삭제 (삭제된 심볼 `Loss`, `rot_rand_v2` 등 import) |
+| **`einops` import 제거** | models.py | 미사용 `rearrange` import 삭제 |
