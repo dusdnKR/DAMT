@@ -8,21 +8,21 @@ class Contrast(nn.Module):
     def __init__(self, args, batch_size, temperature=0.5):
         super().__init__()
         device = torch.device(f"cuda:{args.local_rank}")
-        self.batch_size = batch_size
         self.register_buffer("temp", torch.tensor(temperature).to(device))
-        self.register_buffer("neg_mask", (~torch.eye(batch_size * 2, batch_size * 2, dtype=bool).to(device)).float())
 
     def forward(self, x_i, x_j):
         z_i = F.normalize(x_i, dim=1)
         z_j = F.normalize(x_j, dim=1)
+        N = z_i.shape[0]
         z = torch.cat([z_i, z_j], dim=0)
         sim = F.cosine_similarity(z.unsqueeze(1), z.unsqueeze(0), dim=2)
-        sim_ij = torch.diag(sim, self.batch_size)
-        sim_ji = torch.diag(sim, -self.batch_size)
+        sim_ij = torch.diag(sim, N)
+        sim_ji = torch.diag(sim, -N)
         pos = torch.cat([sim_ij, sim_ji], dim=0)
         nom = torch.exp(pos / self.temp)
-        denom = self.neg_mask * torch.exp(sim / self.temp)
-        return torch.sum(-torch.log(nom / torch.sum(denom, dim=1))) / (2 * self.batch_size)
+        neg_mask = (~torch.eye(N * 2, dtype=bool, device=sim.device)).float()
+        denom = neg_mask * torch.exp(sim / self.temp)
+        return torch.sum(-torch.log(nom / torch.sum(denom, dim=1))) / (2 * N)
 
 
 class AutoWeightedLoss(nn.Module):
