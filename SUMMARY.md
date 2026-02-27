@@ -404,14 +404,54 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 - GPU 메모리: ~16GB/GPU (batch=2)
 - 체크포인트 크기: ~849MB
 
+### 8.2 본격 학습 (Session 6, 2026-02-27)
+
+**데이터**: fomo60k_wo_scz (9,153 subjects, QC 전 데이터)
+
+| 항목 | 값 |
+|------|------|
+| GPU | 4×RTX4090 |
+| batch_size_per_gpu | 2 |
+| total_batch | 8 |
+| epochs | 301 |
+| iterations/epoch | ~1,145 |
+| lr (effective) | 1.5625e-5 (5e-4 × 8/256) |
+| warmup | 5 epochs |
+| 모니터링 | W&B (project: DAMT-SSL, run: fomo60k_wo_scz_v1) |
+| output_dir | ./runs_fomo60k |
+| GPU 메모리 | ~22GB/GPU |
+
+**Feature 추출**: `extract/extract_all_features.py` 스크립트를 통해 자동 생성
+- nfeats_global.csv (9,153 × 440 features)
+- nfeats_local.csv (9,153 × 126 features)
+- radiomics_texture.csv (9,153 × 72 features)
+
+**초기 loss 분포** (iteration 0):
+| Task | Loss |
+|------|------|
+| rotation | 2.82 |
+| location | 2.22 |
+| contrastive | 1.46 |
+| atlas | 4.72 |
+| feature | 0.72 |
+| texture | 252.18 |
+| mim | 1.05 |
+| **total** | **265.17** |
+
+> texture_loss가 높은 이유: 정규화되지 않은 radiomics 특성의 스케일 차이. AutoWeightedLoss가 자동으로 가중치를 조정할 것으로 예상.
+
 ---
 
 ## 9. 주의사항 및 알려진 이슈
 
-1. **`loss.py`의 `Loss` 클래스는 현재 미사용**: `train_one_epoch` 내부에서 loss를 직접 계산한다. `Loss` 클래스의 시그니처와 현재 파이프라인은 호환되지 않는다 (class 내부는 `DiceCELoss`, 실제는 `CrossEntropyLoss` 사용).
+1. ~~**`loss.py`의 `Loss` 클래스는 현재 미사용**~~: Session 5에서 삭제됨. `AutoWeightedLoss`로 대체.
 
 2. **NaN 배치**: FP16 학습에서 에폭당 ~2개 배치에서 NaN loss가 발생한다. 현재는 해당 배치를 건너뛰는 방식으로 처리 중이며, 학습 안정성에는 영향 없다.
 
-3. **`datasets.py` 경로 하드코딩**: 현재 테스트용 경로가 하드코딩되어 있다. 실제 학습 시 `data_path = args.data_path` 주석 해제 필요.
+3. ~~**`datasets.py` 경로 하드코딩**~~: Session 6에서 `--data-path` 인자 기본값을 fomo60k_wo_scz로 수정. `args.data_path`를 사용.
 
-4. **`trainer.py` 미사용**: import는 주석 처리되어 있으며, 모든 학습 로직은 `main.py`에 구현되어 있다.
+4. **`trainer.py` 미사용**: import 어디에서도 되지 않으며, 삭제 후보.
+
+5. **Feature NaN 값**: 정규화 과정에서 분산이 0인 열에 NaN 발생 (global: ~26K, local: ~7.5K). `fillna(0)` + `nan_to_num()`으로 처리.
+
+6. **W&B 모니터링**: `wandb` 패키지 설치 필요. main.py에서 rank 0에서만 init/log/finish 호출.

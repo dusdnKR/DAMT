@@ -10,6 +10,8 @@ __pycache__/
 # Run directories
 runs_dict/
 runs_test/
+runs_fomo60k/
+wandb/
 
 # IDE
 .vscode/

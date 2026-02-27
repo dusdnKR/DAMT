@@ -2,6 +2,7 @@ import os
 import re
 import csv
 import pandas as pd
+from tqdm import tqdm
 
 def sentence_to_dict(sentence, prefix):
     result = {}
@@ -45,7 +46,7 @@ if __name__ == "__main__":
     flag = True
     with open(os.path.join(data_path, "feats_local.csv"), "w") as f:
         w = csv.writer(f)
-        for subject in os.listdir(data_path):
+        for subject in tqdm(os.listdir(data_path)):
             lstat_path = os.path.join(data_path, subject, "stats/lh.aparc.DKTatlas.mapped.stats")
             rstat_path = os.path.join(data_path, subject, "stats/rh.aparc.DKTatlas.mapped.stats")
             if not os.path.exists(lstat_path): continue

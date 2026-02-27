@@ -1,9 +1,9 @@
 # FUTURE_WORK: DAMT 개선 및 발전 방안
 
 > **작성일**: 2026년 2월 26일  
-> **최종 수정일**: 2026년 2월 26일  
+> **최종 수정일**: 2026년 2월 27일  
 > **배경**: DAMT 코드 리뷰 및 검증 완료 후, NeurIPS 2026 제출을 위한 연구 방향 정리  
-> **현재 상태**: AutoWeightedLoss 및 per-task 모니터링 적용 완료, 4-GPU 학습 검증 통과
+> **현재 상태**: AutoWeightedLoss, per-task 모니터링, W&B 통합 완료. fomo60k_wo_scz(9,153 subjects) 학습 진행 중.
 
 ---
 
@@ -25,10 +25,10 @@
 
 **추후 고려**: GradNorm 방식으로 전환 가능성 검토 (gradient 기반 동적 밸런싱)
 
-### 1.2 데이터셋 경로 설정 복원
+### 1.2 ~~데이터셋 경로 설정 복원~~ ✅ 완료 (2026-02-27)
 
-- `datasets.py`에서 하드코딩된 테스트 경로를 제거하고 `args.data_path`를 사용하도록 복원
-- 전체 데이터셋(60k)으로 전환 시 메모리/속도 확인 필요
+- `--data-path` 기본값을 `/NFS/Users/kimyw/data/fomo60k_wo_scz`로 설정
+- `datasets.py`에서 `args.data_path` 사용
 
 ### 1.3 ~~Loss 모니터링 개선~~ ✅ 완료 (2026-02-26)
 
@@ -37,6 +37,7 @@
 - 기록 항목: `rot_loss`, `loc_loss`, `contrastive_loss`, `atlas_loss`, `feat_loss`, `texture_loss`, `mim_loss`
 - 에폭 종료 시 `AutoWeightedLoss`의 학습된 가중치(`w_*`)도 로그에 저장
 - `log.txt`에 JSON 형식으로 모든 per-task loss + 가중치 기록
+- **W&B(Weights & Biases) 통합** (2026-02-27): 실시간 모니터링 대시보드
 
 **로그 예시** (epoch 0):
 ```json

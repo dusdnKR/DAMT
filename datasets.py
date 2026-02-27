@@ -7,12 +7,11 @@ from monai.data import Dataset
 def get_brain_dataet(args, transform):
     data = []
 
-    # data_path = args.data_path
-    data_path = "/NFS/Users/kimyw/data/sample" # test
+    data_path = args.data_path
 
-    feat_df = pd.read_csv(os.path.join(data_path, "nfeats_global.csv"), index_col="subject")
-    loc_df = pd.read_csv(os.path.join(data_path, "nfeats_local.csv"), index_col="subject")
-    rad_df = pd.read_csv(os.path.join(data_path, "radiomics_texture.csv"), index_col="subject")
+    feat_df = pd.read_csv(os.path.join(data_path, "nfeats_global.csv"), index_col="subject").fillna(0)
+    loc_df = pd.read_csv(os.path.join(data_path, "nfeats_local.csv"), index_col="subject").fillna(0)
+    rad_df = pd.read_csv(os.path.join(data_path, "radiomics_texture.csv"), index_col="subject").fillna(0)
 
     for subject in os.listdir(data_path):
         sub_path = os.path.join(data_path, subject)

@@ -17,6 +17,7 @@ from monai import transforms
 from loss import AutoWeightedLoss, Contrast
 from ops import rot_rand
 import utils
+import wandb
 import warnings
 warnings.filterwarnings(action='ignore')
 
@@ -148,7 +149,7 @@ def get_argparser():
         during which we keep the output layer fixed. Typically doing so during
         the first epoch helps training. Try increasing this value if the loss does not decrease.""")
     parser.add_argument('--project', type=str, default="self-supervised-learning")
-    parser.add_argument('--data-path', type=str, default="NFS/Users/kimyw/data/fomo60k_wo_scz")
+    parser.add_argument('--data-path', type=str, default="/NFS/Users/kimyw/data/fomo60k_wo_scz")
     parser.add_argument('--data-type', type=str, default="OG")
     parser.add_argument('--name', type=str, default="ssl")
     parser.add_argument("--local_rank", type=int, default=0, help="local rank")
@@ -185,6 +186,15 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     utils.init_distributed_mode(args)
     utils.fix_random_seeds(args.seed)
+
+    # ── W&B init (rank 0 only) ──
+    if utils.is_main_process():
+        wandb.init(
+            project=args.project,
+            name=args.name,
+            config=vars(args),
+            resume="allow",
+        )
     
     transform = DataAugmentation(args.local_crops_number, args.loc_patch_crops_number)
     dataset = get_brain_dataet(args=args, transform=transform)
@@ -267,9 +277,13 @@ def main():
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
+            # ── W&B logging ──
+            wandb.log(log_stats, step=epoch)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
+    if utils.is_main_process():
+        wandb.finish()
 
 
 def train_one_epoch(model, loss_function, data_loader, optimizer, 
@@ -533,8 +547,8 @@ class DataAugmentation(object):
 
     def __call__(self, image):
         image = self.load_image(image)
-        features = torch.as_tensor(np.array(image['features'])).float().squeeze(0)
-        radiomics = torch.as_tensor(np.array(image['radiomics'])).float().squeeze(0)
+        features = torch.nan_to_num(torch.as_tensor(np.array(image['features'])).float().squeeze(0))
+        radiomics = torch.nan_to_num(torch.as_tensor(np.array(image['radiomics'])).float().squeeze(0))
 
         crops = []
         crops.append(self.global_transfo(image.copy()))
