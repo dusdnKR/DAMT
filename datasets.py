@@ -13,6 +13,11 @@ def get_brain_dataet(args, transform):
     loc_df = pd.read_csv(os.path.join(data_path, "nfeats_local.csv"), index_col="subject").fillna(0)
     rad_df = pd.read_csv(os.path.join(data_path, "radiomics_texture.csv"), index_col="subject").fillna(0)
 
+    # Z-score standardise radiomics so texture_loss has the same scale as other tasks
+    rad_mean = rad_df.mean()
+    rad_std  = rad_df.std().replace(0, 1)   # avoid division by zero
+    rad_df   = ((rad_df - rad_mean) / rad_std).fillna(0)
+
     for subject in os.listdir(data_path):
         sub_path = os.path.join(data_path, subject)
         image = os.path.join(sub_path, "mri/brainmask.nii.gz")

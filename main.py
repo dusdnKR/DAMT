@@ -277,8 +277,10 @@ def main():
         if utils.is_main_process():
             with (Path(args.output_dir) / "log.txt").open("a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-            # ── W&B logging ──
-            wandb.log(log_stats, step=epoch)
+            # ── W&B epoch-level logging ──
+            epoch_end_it = (epoch + 1) * len(data_loader)
+            epoch_log = {f"epoch/{k}": v for k, v in log_stats.items()}
+            wandb.log(epoch_log, step=epoch_end_it)
     total_time = time.time() - start_time
     total_time_str = str(datetime.timedelta(seconds=int(total_time)))
     print('Training time {}'.format(total_time_str))
@@ -398,19 +400,34 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 fp16_scaler.update()
             # logging
             torch.cuda.synchronize()
+            _rot  = rot_loss.item() if isinstance(rot_loss, torch.Tensor) else rot_loss
+            _loc  = loc_loss.item() if isinstance(loc_loss, torch.Tensor) else loc_loss
+            _con  = contrastive_loss.item() if isinstance(contrastive_loss, torch.Tensor) else contrastive_loss
+            _atl  = atlas_loss.item() if isinstance(atlas_loss, torch.Tensor) else 0
+            _feat = feat_loss.item() if isinstance(feat_loss, torch.Tensor) else 0
+            _tex  = texture_loss.item() if isinstance(texture_loss, torch.Tensor) else 0
+            _mim  = mim_loss.item() if isinstance(mim_loss, torch.Tensor) else 0
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
-            # per-task loss monitoring
             metric_logger.update(
-                rot_loss=rot_loss.item() if isinstance(rot_loss, torch.Tensor) else rot_loss,
-                loc_loss=loc_loss.item() if isinstance(loc_loss, torch.Tensor) else loc_loss,
-                contrastive_loss=contrastive_loss.item() if isinstance(contrastive_loss, torch.Tensor) else contrastive_loss,
-                atlas_loss=atlas_loss.item() if isinstance(atlas_loss, torch.Tensor) else 0,
-                feat_loss=feat_loss.item() if isinstance(feat_loss, torch.Tensor) else 0,
-                texture_loss=texture_loss.item() if isinstance(texture_loss, torch.Tensor) else 0,
-                mim_loss=mim_loss.item() if isinstance(mim_loss, torch.Tensor) else 0,
+                rot_loss=_rot, loc_loss=_loc, contrastive_loss=_con,
+                atlas_loss=_atl, feat_loss=_feat, texture_loss=_tex, mim_loss=_mim,
             )
+            # ── W&B iteration-level logging (every 100 iters) ──
+            if utils.is_main_process() and it % 100 == 0:
+                wandb.log({
+                    "iter/loss": loss.item(),
+                    "iter/rot_loss": _rot,
+                    "iter/loc_loss": _loc,
+                    "iter/contrastive_loss": _con,
+                    "iter/atlas_loss": _atl,
+                    "iter/feat_loss": _feat,
+                    "iter/texture_loss": _tex,
+                    "iter/mim_loss": _mim,
+                    "iter/lr": optimizer.param_groups[0]["lr"],
+                    "iter/step": it,
+                }, step=it)
 
         # gather the stats from all processes
         metric_logger.synchronize_between_processes()
