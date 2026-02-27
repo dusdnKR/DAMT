@@ -455,3 +455,5 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 5. **Feature NaN 값**: 정규화 과정에서 분산이 0인 열에 NaN 발생 (global: ~26K, local: ~7.5K). `fillna(0)` + `nan_to_num()`으로 처리.
 
 6. **W&B 모니터링**: `wandb` 패키지 설치 필요. main.py에서 rank 0에서만 init/log/finish 호출.
+
+7. **Contrastive Loss 동적 배치 처리** (Session 7에서 수정): `Contrast` 클래스의 `neg_mask`가 고정 `batch_size`로 사전 계산되어, 에폭 마지막 배치(9153/4=2288.25 → 나머지 배치)에서 차원 불일치 RuntimeError 발생. `forward()`에서 `N = z_i.shape[0]`으로 동적 계산하도록 수정하여 가변 배치 크기를 지원. (commit: c37c31c)
