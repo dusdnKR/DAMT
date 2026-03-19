@@ -18,9 +18,9 @@ _ROT_TABLE = [
 
 
 def rot_rand(args, x_s, a_s):
-    \"\"\"Apply random 90-degree rotations (10 classes) to each sample in the batch.\"\"\"
+    """Apply random 90-degree rotations (10 classes) to each sample in the batch."""
     img_n = x_s.size(0)
-    device = torch.device(f\"cuda:{args.local_rank}\")
+    device = torch.device(f"cuda:{args.local_rank}")
     x_aug = x_s.detach().clone()
     a_aug = a_s.detach().clone()
     x_rot = torch.zeros(img_n, dtype=torch.long, device=device)

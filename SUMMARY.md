@@ -8,6 +8,7 @@
 
 - 데이터셋 subject 필터 기준을 `outlier_path` 기반 CSV에서 `--data` 인자 기반 텍스트 파일(`{data_path}/{data}.txt`)로 변경
 - 로더 로그를 txt 기준으로 갱신: 필터 전 subject 수, txt 목록 수, txt 필터 후 subject 수, 유효성 검사 후 최종 subject 수
+- **`extract/msn_feat.py` 완전 재작성**: FreeSurfer stats 파일에서 직접 per-region feature를 읽어 MSN(Morphological Similarity Network)을 생성하는 스크립트 추가
 
 ---
 
@@ -383,10 +384,68 @@ loss = loss.sum() / (mask.sum() + 1e-5)
 | `ops.py` | 데이터 증강 연산 | `rot_rand()`, `aug_rand()`, `patch_rand_drop()` |
 | `utils.py` | 유틸리티 (DDP, 스케줄러) | `cosine_scheduler()`, `MetricLogger`, `init_distributed_mode()` |
 | `swin_unetr.py` | 3D Swin Transformer 구현 | `SwinTransformer`, `SwinUNETR` |
+| `extract/msn_feat.py` | MSN(.mat) 생성 스크립트 | `parse_stats_file()`, `compute_msn()`, `main()` |
 
 ---
 
-## 8. 학습 실행 방법
+## 8. MSN (Morphological Similarity Network) 생성
+
+### 8.1 개요
+
+MSN은 피험자별 뇌 영역 간 형태학적 유사도 행렬이다. 각 영역의 형태학적 feature 프로파일을 비교하여 (n_regions × n_regions) Pearson 상관행렬로 표현한다.
+
+### 8.2 계산 방식
+
+1. FreeSurfer stats 파일(`lh/rh.aparc.DKTatlas.mapped.stats`)에서 per-region feature 값 읽기
+2. 각 feature를 피험자 내 영역 전체에 대해 z-score 정규화 (StandardScaler)
+3. 영역 프로파일 간 Pearson 상관관계 계산 → (n_regions × n_regions) MSN
+
+### 8.3 사용 가능 feature (8종)
+
+| Feature | 약어 | 설명 |
+|---------|------|------|
+| SurfArea | sa | 표면적 (mm²) |
+| GrayVol | gv | 회백질 부피 (mm³) |
+| ThickAvg | ta | 평균 피질 두께 (mm) |
+| ThickStd | ts | 피질 두께 표준편차 |
+| MeanCurv | mc | 평균 곡률 |
+| GausCurv | gc | 가우시안 곡률 |
+| FoldInd | fi | 접힘 지수 |
+| CurvInd | ci | 곡률 지수 |
+
+기본값: `SurfArea GrayVol ThickAvg MeanCurv GausCurv` (5종)
+
+### 8.4 출력 구조
+
+```
+{data_path}/results/msn_sa_gv_ta_mc_gc/
+    sub-001.mat   → connectivity(n×n), value(n×f), regions(n,), features(f,)
+    sub-002.mat
+    ...
+```
+
+### 8.5 실행 방법
+
+```bash
+# 기본 5개 feature (sa, gv, ta, mc, gc)
+python extract/msn_feat.py --data-path /path/to/data
+
+# feature 조합 지정
+python extract/msn_feat.py --data-path /path/to/data --features SurfArea GrayVol ThickAvg
+
+# 특정 subject 목록만 처리
+python extract/msn_feat.py --data-path /path/to/data --data train_subjects
+```
+
+### 8.6 설계 결정: glo/loc CSV vs stats 파일 직접 파싱
+
+- `feats_global.csv`와 `feats_local.csv`는 feature regression pretext task용으로 전역 요약통계와 per-region 데이터가 혼합된 형태
+- MSN에는 순수한 per-region 데이터가 필요하므로, FreeSurfer stats 파일에서 직접 읽는 방식 채택
+- 이 방식이 8개 전체 feature에 유연하게 접근 가능하며 CSV 의존성을 제거
+
+---
+
+## 9. 학습 실행 방법
 
 ```bash
 # 4-GPU 분산 학습 (RTX 4090 × 4 기준)
@@ -447,7 +506,7 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 
 ---
 
-## 9. 주의사항 및 알려진 이슈
+## 10. 주의사항 및 알려진 이슈
 
 1. ~~**`loss.py`의 `Loss` 클래스는 현재 미사용**~~: Session 5에서 삭제됨. `AutoWeightedLoss`로 대체.
 
@@ -465,7 +524,7 @@ python -m torch.distributed.launch --nproc_per_node=4 main.py \
 
 ---
 
-## 10. Session 8 리팩토링 요약
+## 11. Session 8 리팩토링 요약
 
 | 변경 | 파일 | 설명 |
 |------|------|------|

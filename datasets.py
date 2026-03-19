@@ -1,6 +1,7 @@
 import os
 import numpy as np
 import pandas as pd
+import scipy.io as sio
 from monai.data import Dataset
 
 
@@ -25,12 +26,29 @@ def _load_subjects_from_txt(data_path, data_name):
     return subjects
 
 
+def _load_msn(mat_path, msn_dim):
+    """Return upper-triangle vector of the MSN connectivity matrix.
+
+    Falls back to a zero vector if the file is missing or unreadable.
+    Zero vectors are recognised downstream by remove_zerotensor and skipped.
+    """
+    try:
+        conn = sio.loadmat(mat_path)["connectivity"]   # (n_regions, n_regions)
+        idx = np.triu_indices(conn.shape[0], k=1)
+        vec = conn[idx].astype(np.float32)
+        if vec.shape[0] != msn_dim:
+            return np.zeros(msn_dim, dtype=np.float32)
+        return vec
+    except Exception:
+        return np.zeros(msn_dim, dtype=np.float32)
+
+
 def get_brain_dataet(args, transform):
     data = []
 
     data_path = args.data_path
     selected_subjects = _load_subjects_from_txt(data_path, getattr(args, "data", None))
-    txt_file = os.path.join(data_path, f"{getattr(args, 'data', '')}.txt")
+    txt_file = os.path.join("data", f"{getattr(args, 'data', '')}.txt") 
     all_subjects = [
         s for s in os.listdir(data_path)
         if os.path.isdir(os.path.join(data_path, s))
@@ -47,14 +65,23 @@ def get_brain_dataet(args, transform):
         print(f"subjects listed in txt: {len(selected_subjects)}")
         print(f"subjects after txt filter: {len(filtered_subjects)}")
 
-    feat_df = pd.read_csv(os.path.join(data_path, "nfeats_global.csv"), index_col="subject").fillna(0)
-    loc_df = pd.read_csv(os.path.join(data_path, "nfeats_local.csv"), index_col="subject").fillna(0)
-    rad_df = pd.read_csv(os.path.join(data_path, "radiomics_texture.csv"), index_col="subject").fillna(0)
+    feat_df = pd.read_csv(os.path.join(data_path, "results/nfeats_global.csv"), index_col="subject").fillna(0)
+    loc_df = pd.read_csv(os.path.join(data_path, "results/nfeats_local.csv"), index_col="subject").fillna(0)
+    rad_df = pd.read_csv(os.path.join(data_path, "results/radiomics_texture.csv"), index_col="subject").fillna(0)
 
     # Z-score standardise radiomics so texture_loss has the same scale as other tasks
     rad_mean = rad_df.mean()
     rad_std  = rad_df.std().replace(0, 1)   # avoid division by zero
     rad_df   = ((rad_df - rad_mean) / rad_std).fillna(0)
+
+    # MSN: optional. If msn_dir is set, load per-subject .mat files.
+    msn_dir = getattr(args, "msn_dir", None)
+    msn_n = getattr(args, "msn_n_regions", 62)
+    msn_dim = msn_n * (msn_n - 1) // 2
+    if msn_dir:
+        print(f"MSN dir : {msn_dir}  (n_regions={msn_n}, vec_dim={msn_dim})")
+    else:
+        print("MSN dir : not set — msn_loss will be skipped")
 
     for subject in filtered_subjects:
         sub_path = os.path.join(data_path, subject)
@@ -62,9 +89,17 @@ def get_brain_dataet(args, transform):
         atlas = os.path.join(sub_path, "mri/aparc+aseg.nii.gz")
         if not os.path.isfile(image) or not os.path.isfile(atlas): continue
         if subject not in feat_df.index or subject not in loc_df.index or subject not in rad_df.index: continue
+
         features = np.concatenate([feat_df.loc[subject].values, loc_df.loc[subject].values]).reshape(1, -1)
         radiomics = rad_df.loc[subject].values.reshape(1, -1)
-        data.append({"image": image, "label": atlas, "features": features, "radiomics": radiomics})
+
+        if msn_dir:
+            msn = _load_msn(os.path.join(msn_dir, f"{subject}.mat"), msn_dim)
+        else:
+            msn = np.zeros(msn_dim, dtype=np.float32)
+
+        data.append({"image": image, "label": atlas,
+                     "features": features, "radiomics": radiomics, "msn": msn})
 
     print("subjects after data validity checks:", len(data))
 

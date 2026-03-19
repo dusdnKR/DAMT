@@ -46,21 +46,21 @@ class SSLHead_Swin(nn.Module):
             nn.InstanceNorm3d(32),
             nn.Flatten(),
             nn.Linear(2048, feat_dim),
-            nn.ReLU(),
-        )
-        self.loc_feat_head = nn.Sequential(
-            nn.Conv3d(dim, 256, 1),
-            nn.InstanceNorm3d(256),
-            nn.Flatten(),
-            nn.Linear(2048, feat_dim),
-            nn.ReLU(),
+            # No ReLU: targets are z-scored (can be negative)
         )
         self.texture_head = nn.Sequential(
             nn.Conv3d(dim, 32, 1),
             nn.InstanceNorm3d(32),
             nn.Flatten(),
             nn.Linear(2048, rad_dim),
-            nn.ReLU(),
+            # No ReLU: targets are z-scored (can be negative)
+        )
+        msn_n = getattr(args, 'msn_n_regions', 62)
+        msn_dim = msn_n * (msn_n - 1) // 2   # upper-triangle of (msn_n × msn_n)
+        self.msn_head = nn.Sequential(
+            nn.Linear(dim, dim // 2),
+            nn.GELU(),
+            nn.Linear(dim // 2, msn_dim),
         )
 
         self.mask_token = nn.Parameter(torch.zeros(1, 1, feature_size))
@@ -136,6 +136,9 @@ class SSLHead_Swin(nn.Module):
 
     def forward_global(self, x4):
         return self.glo_feat_head(x4)
+
+    def forward_msn(self, cls_token):
+        return self.msn_head(cls_token)
 
     def forward_decoder(self, hidden_states_out):
         x_upsample = self.decoder(hidden_states_out)

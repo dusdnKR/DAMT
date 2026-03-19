@@ -54,7 +54,7 @@ def get_argparser():
     # Paths & identifiers
     parser.add_argument('--project', type=str, default='self-supervised-learning')
     parser.add_argument('--data-path', type=str, default='/NFS/Users/kimyw/data/fomo60k_wo_scz')
-    parser.add_argument('--data', type=str, default='fomo60k_wo_scz_test')
+    parser.add_argument('--data', type=str, default='fomo60k_wo_scz')
     parser.add_argument('--name', type=str, default='ssl')
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--local-rank', type=int, default=0)
@@ -62,6 +62,13 @@ def get_argparser():
     parser.add_argument('--dist_url', default='env://')
     parser.add_argument('--output_dir', default='./runs_dict',
         help='path where to save')
+
+    # MSN loss
+    parser.add_argument('--msn-dir', type=str, default='',
+        help='Path to MSN .mat directory (e.g. .../results/msn_sa_gv_ta_mc_gc). '
+             'Leave empty to disable msn_loss.')
+    parser.add_argument('--msn-n-regions', type=int, default=62,
+        help='Number of brain regions in the MSN (default: 62 for DKTatlas lh+rh)')
 
     args = parser.parse_args()
     
@@ -78,6 +85,9 @@ def remove_zerotensor(tensor_p, tensor):
 
 def main():
     args = get_argparser()
+    # Normalise msn_dir: empty string → None (disabled)
+    if not getattr(args, 'msn_dir', ''):
+        args.msn_dir = None
     os.makedirs(args.output_dir, exist_ok=True)
     utils.init_distributed_mode(args)
     utils.fix_random_seeds(args.seed)
@@ -192,10 +202,11 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
         criterion_atlas = torch.nn.CrossEntropyLoss()
         criterion_feat = torch.nn.L1Loss()
         criterion_texture = torch.nn.L1Loss()
+        criterion_msn = torch.nn.L1Loss()
 
         metric_logger = utils.MetricLogger(delimiter="  ")
         header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
-        for it, (images, atlases, masks, radiomics, features, loc_trues) in enumerate(metric_logger.log_every(data_loader, 100, header)):
+        for it, (images, atlases, masks, radiomics, features, loc_trues, msn_targets) in enumerate(metric_logger.log_every(data_loader, 100, header)):
             # update weight decay and learning rate according to their schedule
             it = len(data_loader) * epoch + it  # global training iteration
             for i, param_group in enumerate(optimizer.param_groups):
@@ -209,6 +220,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             radiomics = radiomics.float().cuda(non_blocking=True)
             features = features.float().cuda(non_blocking=True)
             loc_trues = loc_trues.long().cuda(non_blocking=True)
+            msn_targets = msn_targets.float().cuda(non_blocking=True)
 
             glo_radi = radiomics
             glo_feat = features
@@ -236,6 +248,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 glo_atlas_p = model.module.forward_decoder(hidden_states_out1)
                 contrastive1_p = model.module.forward_contrastive(cls_token1)
                 contrastive2_p = model.module.forward_contrastive(cls_token2)
+                msn_p = model.module.forward_msn(cls_token1)
                 # local forward
                 hidden_states_out3, cls_token3 = model.module.encode(x3)
                 hidden_states_out4, _          = model.module.encode_mask(loc_x1, loc_mask)
@@ -250,6 +263,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 loc_atlas_p, loc_atlas = remove_zerotensor(loc_atlas_p, a3)
                 texture_p, glo_radi = remove_zerotensor(texture_p, glo_radi)
                 glo_feat_p, glo_feat = remove_zerotensor(glo_feat_p, glo_feat)
+                msn_p, msn_t = remove_zerotensor(msn_p, msn_targets)
 
                 rot_p = torch.cat([rot1_p, rot2_p], dim=0)
                 rot = torch.cat([rot1, rot2], dim=0)
@@ -263,6 +277,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 atlas_loss = 0.5 * (glo_atlas_loss + loc_atlas_loss)
                 feat_loss = criterion_feat(glo_feat_p, glo_feat) if glo_feat.sum() != 0 else 0
                 texture_loss = criterion_texture(texture_p, glo_radi) if glo_radi.sum() != 0 else 0
+                msn_loss = criterion_msn(msn_p, msn_t) if msn_t.numel() > 0 else 0
 
                 # auto-weighted multi-task loss
                 raw_losses = {
@@ -273,6 +288,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                     "feat": feat_loss,
                     "texture": texture_loss,
                     "mim": mim_loss,
+                    "msn": msn_loss,
                 }
                 loss, weighted_losses = loss_function(raw_losses)
 
@@ -305,12 +321,14 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             _feat = feat_loss.item() if isinstance(feat_loss, torch.Tensor) else 0
             _tex  = texture_loss.item() if isinstance(texture_loss, torch.Tensor) else 0
             _mim  = mim_loss.item() if isinstance(mim_loss, torch.Tensor) else 0
+            _msn  = msn_loss.item() if isinstance(msn_loss, torch.Tensor) else 0
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
             metric_logger.update(wd=optimizer.param_groups[0]["weight_decay"])
             metric_logger.update(
                 rot_loss=_rot, loc_loss=_loc, contrastive_loss=_con,
                 atlas_loss=_atl, feat_loss=_feat, texture_loss=_tex, mim_loss=_mim,
+                msn_loss=_msn,
             )
             # ── W&B iteration-level logging (every 100 iters) ──
             if utils.is_main_process() and it % 100 == 0:
@@ -323,6 +341,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                     "iter/feat_loss": _feat,
                     "iter/texture_loss": _tex,
                     "iter/mim_loss": _mim,
+                    "iter/msn_loss": _msn,
                     "iter/lr": optimizer.param_groups[0]["lr"],
                     "iter/step": it,
                 }, step=it)
@@ -464,6 +483,7 @@ class DataAugmentation(object):
         image = self.load_image(image)
         features = torch.nan_to_num(torch.as_tensor(np.array(image['features'])).float().squeeze(0))
         radiomics = torch.nan_to_num(torch.as_tensor(np.array(image['radiomics'])).float().squeeze(0))
+        msn = torch.nan_to_num(torch.as_tensor(np.array(image['msn'])).float())
 
         crops = []
         crops.append(self.global_transfo(image.copy()))
@@ -475,7 +495,7 @@ class DataAugmentation(object):
         atlases = [crop['label'] for crop in crops]
         masks = [self.glo_mask_generator(), self.loc_mask_generator()]
 
-        return images, atlases, masks, radiomics, features, loc_true
+        return images, atlases, masks, radiomics, features, loc_true, msn
 
 
 
