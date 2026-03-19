@@ -54,7 +54,7 @@ def get_argparser():
     # Paths & identifiers
     parser.add_argument('--project', type=str, default='self-supervised-learning')
     parser.add_argument('--data-path', type=str, default='/NFS/Users/kimyw/data/fomo60k_wo_scz')
-    parser.add_argument('--outlier-variable', type=str, default='0_outliers_sample_nonpar')
+    parser.add_argument('--data', type=str, default='fomo60k_wo_scz_test')
     parser.add_argument('--name', type=str, default='ssl')
     parser.add_argument('--local_rank', type=int, default=0)
     parser.add_argument('--local-rank', type=int, default=0)

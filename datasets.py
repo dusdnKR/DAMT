@@ -4,26 +4,33 @@ import pandas as pd
 from monai.data import Dataset
 
 
-def _load_subjects_from_csv(csv_path):
-    if not csv_path or not os.path.isfile(csv_path):
+def _load_subjects_from_txt(data_path, data_name):
+    if not data_name:
         return None
 
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return set()
+    txt_path = os.path.join(data_path, f"{data_name}.txt")
+    if not os.path.isfile(txt_path):
+        return None
 
-    for col in ["subject", "subjects", "subj", "participant_id", "id"]:
-        if col in df.columns:
-            return set(df[col].dropna().astype(str).str.strip())
-
-    return set(df.iloc[:, 0].dropna().astype(str).str.strip())
+    subjects = set()
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            first = line.split(",", 1)[0].strip()
+            subject = first.split()[0].strip()
+            if subject:
+                subjects.add(subject)
+    return subjects
 
 
 def get_brain_dataet(args, transform):
     data = []
 
     data_path = args.data_path
-    selected_subjects = _load_subjects_from_csv(getattr(args, "outlier_path", None))
+    selected_subjects = _load_subjects_from_txt(data_path, getattr(args, "data", None))
+    txt_file = os.path.join(data_path, f"{getattr(args, 'data', '')}.txt")
     all_subjects = [
         s for s in os.listdir(data_path)
         if os.path.isdir(os.path.join(data_path, s))
@@ -33,12 +40,12 @@ def get_brain_dataet(args, transform):
         if selected_subjects is None or str(s) in selected_subjects
     ]
 
-    print(f"subjects before csv filter: {len(all_subjects)}")
+    print(f"subjects before txt filter: {len(all_subjects)}")
     if selected_subjects is None:
-        print(f"subjects after csv filter: {len(filtered_subjects)} (csv not applied)")
+        print(f"subjects after txt filter: {len(filtered_subjects)} (txt not applied: {txt_file})")
     else:
-        print(f"subjects listed in csv: {len(selected_subjects)}")
-        print(f"subjects after csv filter: {len(filtered_subjects)}")
+        print(f"subjects listed in txt: {len(selected_subjects)}")
+        print(f"subjects after txt filter: {len(filtered_subjects)}")
 
     feat_df = pd.read_csv(os.path.join(data_path, "nfeats_global.csv"), index_col="subject").fillna(0)
     loc_df = pd.read_csv(os.path.join(data_path, "nfeats_local.csv"), index_col="subject").fillna(0)
