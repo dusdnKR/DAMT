@@ -44,7 +44,7 @@ if __name__ == "__main__":
     data_path = "/NFS/Users/kimyw/data/sample"
 
     flag = True
-    with open(os.path.join(data_path, "feats_local.csv"), "w") as f:
+    with open(os.path.join(data_path, "results/feats_local.csv"), "w") as f:
         w = csv.writer(f)
         for subject in tqdm(os.listdir(data_path)):
             lstat_path = os.path.join(data_path, subject, "stats/lh.aparc.DKTatlas.mapped.stats")
@@ -58,6 +58,6 @@ if __name__ == "__main__":
                 flag = False
             w.writerow(result.values())
 
-    df = pd.read_csv(os.path.join(data_path, "feats_local.csv"), index_col="subject")
+    df = pd.read_csv(os.path.join(data_path, "results/feats_local.csv"), index_col="subject")
     normalization_df = (df - df.mean()) / df.std()
-    normalization_df.to_csv(os.path.join(data_path, "nfeats_local.csv"))
+    normalization_df.to_csv(os.path.join(data_path, "results/nfeats_local.csv"))

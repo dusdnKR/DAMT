@@ -72,7 +72,7 @@ def main():
         texture_dict.update(textureFeaturesExtractor(img, roi, 3))
         textures.append(texture_dict)
 
-    with open(os.path.join(data_path, "radiomics_texture.csv"), "w") as f:
+    with open(os.path.join(data_path, "results/radiomics_texture.csv"), "w") as f:
         writer = csv.DictWriter(f, textures[0].keys())
         writer.writeheader()
         writer.writerows(textures)
