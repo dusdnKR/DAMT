@@ -7,11 +7,22 @@ from monai.data import Dataset
 
 def _load_subjects_from_txt(data_path, data_name):
     if not data_name:
-        return None
+        return None, None
 
-    txt_path = os.path.join(data_path, f"{data_name}.txt")
-    if not os.path.isfile(txt_path):
-        return None
+    repo_root = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(repo_root, "data", f"{data_name}.txt"),
+        os.path.join(data_path, f"{data_name}.txt"),
+    ]
+
+    txt_path = None
+    for path in candidates:
+        if os.path.isfile(path):
+            txt_path = path
+            break
+
+    if txt_path is None:
+        return None, candidates[0]
 
     subjects = set()
     with open(txt_path, "r", encoding="utf-8") as f:
@@ -23,7 +34,7 @@ def _load_subjects_from_txt(data_path, data_name):
             subject = first.split()[0].strip()
             if subject:
                 subjects.add(subject)
-    return subjects
+    return subjects, txt_path
 
 
 def _load_msn(mat_path, msn_dim):
@@ -47,8 +58,7 @@ def get_brain_dataet(args, transform):
     data = []
 
     data_path = args.data_path
-    selected_subjects = _load_subjects_from_txt(data_path, getattr(args, "data", None))
-    txt_file = os.path.join("data", f"{getattr(args, 'data', '')}.txt") 
+    selected_subjects, txt_file = _load_subjects_from_txt(data_path, getattr(args, "data", None))
     all_subjects = [
         s for s in os.listdir(data_path)
         if os.path.isdir(os.path.join(data_path, s))
@@ -62,6 +72,7 @@ def get_brain_dataet(args, transform):
     if selected_subjects is None:
         print(f"subjects after txt filter: {len(filtered_subjects)} (txt not applied: {txt_file})")
     else:
+        print(f"txt applied: {txt_file}")
         print(f"subjects listed in txt: {len(selected_subjects)}")
         print(f"subjects after txt filter: {len(filtered_subjects)}")
 
