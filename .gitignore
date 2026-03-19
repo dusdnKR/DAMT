@@ -8,9 +8,7 @@ __pycache__/
 *.pt
 
 # Run directories
-runs_dict/
-runs_test/
-runs_fomo60k/
+runs_*/
 wandb/
 
 # IDE
