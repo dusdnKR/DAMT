@@ -17,24 +17,27 @@ Features are extracted once from the frozen encoder, then CV runs on the cached 
 
 Usage
 -----
-# Age regression
+# Age regression on GPU 2
 python linear_probe.py \\
     --checkpoint runs_test_msn/checkpoint.pth \\
     --data-path /NFS/Users/kimyw/data/fomo60k_wo_scz \\
-    --data fomo60k_wo_scz \\
+    --data fomo60k_wo_scz_0319 \\
     --task age_regression \\
+    --gpu 2 \\
     --epochs 200 --lr 1e-3 --batch-size 256
 
-# Sex classification
+# Sex classification on GPU 3
 python linear_probe.py \\
     --checkpoint runs_test_msn/checkpoint.pth \\
     --data-path /NFS/Users/kimyw/data/fomo60k_wo_scz \\
+    --data fomo60k_wo_scz_0319 \\
     --task sex_classification \\
+    --gpu 3 \\
     --epochs 200 --lr 1e-3
 
 Notes
 -----
-- Single GPU only (no DDP).
+- Single GPU only (no DDP). Use --gpu to select the device index.
 - The encoder is always frozen; only the linear head trains.
 - MRI files are loaded with the same preprocessing as pretraining (1.25mm isotropic,
   128³ crop, intensity normalisation).
@@ -71,7 +74,8 @@ def get_args():
     p.add_argument("--lr",          type=float, default=1e-3)
     p.add_argument("--batch-size",  type=int, default=256)
     p.add_argument("--folds",       type=int, default=5)
-    p.add_argument("--device",      type=str, default="cuda")
+    p.add_argument("--gpu",         type=int, default=0,
+                   help="GPU index to use (default: 0). Ignored if CUDA is unavailable.")
     p.add_argument("--in-channels", type=int, default=1)
     p.add_argument("--output-dir",  type=str, default="./linear_probe_results")
     # MSN / asym dims for model init (must match pretraining)
@@ -288,6 +292,15 @@ def evaluate_sex(all_pred_cls, all_probs, all_labels):
 def main():
     args = get_args()
     os.makedirs(args.output_dir, exist_ok=True)
+
+    # Resolve device from --gpu flag
+    if torch.cuda.is_available():
+        args.device = f"cuda:{args.gpu}"
+        torch.cuda.set_device(args.gpu)
+    else:
+        args.device = "cpu"
+        print("[INFO] CUDA not available, running on CPU.")
+    print(f"Using device: {args.device}")
 
     # ── Load participants.tsv ──────────────────────────────────────────────
     raw_lookup, age_mean, age_std = load_participants(args.data_path)
