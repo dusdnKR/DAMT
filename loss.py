@@ -39,7 +39,8 @@ class AutoWeightedLoss(nn.Module):
             be used when passing losses to ``forward()``.
     """
 
-    TASK_NAMES = ["rot", "loc", "contrastive", "atlas", "feat", "texture", "mim", "msn"]
+    TASK_NAMES = ["rot", "loc", "contrastive", "atlas", "feat", "texture", "mim", "msn",
+                  "age", "sex", "asym"]
 
     def __init__(self, task_names=None):
         super().__init__()
