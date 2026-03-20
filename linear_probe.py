@@ -160,7 +160,7 @@ def load_encoder(checkpoint_path, args):
 
     model = SSLHead_Swin(model_args).to(args.device)
 
-    ckpt = torch.load(checkpoint_path, map_location=args.device)
+    ckpt = torch.load(checkpoint_path, map_location=args.device, weights_only=False)
     # Support both raw state_dict and wrapped checkpoints
     state_dict = ckpt.get("model", ckpt)
 
