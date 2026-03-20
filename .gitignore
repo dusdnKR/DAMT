@@ -9,6 +9,7 @@ __pycache__/
 *.pt
 
 # Run directories
+runs_*/
 wandb/
 
 # IDE
