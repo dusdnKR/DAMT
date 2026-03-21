@@ -398,7 +398,7 @@ def main():
         "folds": args.folds,
         "metrics": metrics,
     }
-    out_name = os.path.basename(args.checkpoint).replace(".pth", "")
+    out_name = "_".join(os.path.splitext(os.path.normpath(args.checkpoint))[0].split(os.path.sep)[-2:])
     out_path = os.path.join(args.output_dir, f"{out_name}_{args.task}.json")
     with open(out_path, "w") as f:
         json.dump(result, f, indent=2)
