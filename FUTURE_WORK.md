@@ -1,8 +1,9 @@
 # FUTURE_WORK: DAMT 연구 방향
 
 > **최종 수정일**: 2026-03-20
-> **현재 상태**: 9개 pretext task (rot/loc/**VICReg**/atlas/feat/texture/mim/msn/asym) 구현 완료. linear_probe.py 완료. 30-epoch 대조 실험 분석 완료.
-> ⚠️ **age/sex pretext task 제거** — downstream 평가 target과 동일한 신호를 pretraining에 사용하면 label leakage 발생. **SimCLR → VICReg 교체** 완료.
+> **현재 상태**: 9개 pretext task (rot/loc/**SimCLR**/atlas/feat/texture/mim/msn/asym) 구현 완료. linear_probe.py 완료. 30-epoch 대조 실험 분석 완료.
+> ⚠️ **age/sex pretext task 제거** — downstream 평가 target과 동일한 신호를 pretraining에 사용하면 label leakage 발생.
+> ⚠️ **VICReg 롤백** — AutoWeightedLoss 환경에서 loss scale 불균형(~70 vs 다른 task ~0.2-4.0)으로 역효과. SimCLR 유지.
 
 ---
 
@@ -80,25 +81,26 @@ python linear_probe.py \
 
 ## 2. Loss 조합 검토: 추가 vs 제거
 
-### 2.1 가장 즉각적인 개선: Contrastive 교체
+### 2.1 Contrastive 교체 검토 결과
 
-**현 문제**: SimCLR with batch=8 → negative 수 6개 → 학습 신호 약함. 0.76에서 plateau.
+**현 문제**: SimCLR with batch_size=2/GPU → 같은 GPU 내 negative 1개뿐 → 0.76에서 plateau.
 
-**대안 A — BYOL / SimSiam (negative-free)**:
-- negative 없이 두 뷰의 표현 일관성만 학습
-- batch size에 무관하게 안정적 학습
-- Collapse 방지: BYOL은 momentum encoder, SimSiam은 stop-gradient
+**VICReg 시도 및 롤백 (2026-03-22)**:
+VICReg(sim_coeff=25, std_coeff=25, cov_coeff=1)를 적용했으나 **AutoWeightedLoss와 충돌**:
+- 랜덤 초기화 직후 VICReg loss ≈ 60~70 (MSE×25 + hinge×25)
+- 다른 task loss (0.2~4.0) 대비 10~30배 → AutoWeightedLoss가 contrastive의 `log_var`를 급격히 올려 weight을 0에 가깝게 낮춤 → contrastive 학습 자체가 억제됨
+- **근본 원인**: VICReg 계수(25, 25, 1)는 ImageNet 기준이며 multi-task Kendall weighting 환경에는 맞지 않음
+- **결론**: SimCLR 원상 복구
 
-**대안 B — VICReg**:
-- Variance-Invariance-Covariance regularization
-- batch 크기 무관, collapse 없음
-- 코드 변경 규모: loss.py에 VICReg 클래스 추가 (~50줄)
+**VICReg를 올바르게 쓰려면** (미래 작업):
+- AutoWeightedLoss 없이 VICReg만 단독 사용하거나
+- VICReg를 별도 학습 단계(warm-up)로 분리하거나
+- 계수를 `sim=1/25, std=1/25, cov=1/25`로 스케일 다운하여 다른 task와 비슷한 스케일 맞춤
 
-**대안 C — MoCo (memory bank)**:
-- 큰 memory bank(e.g. 4096)로 효과적인 negative 확보
-- 기존 SimCLR 구조를 최대한 유지
-
-**권장**: 구현 용이성 기준 VICReg > SimSiam > MoCo. 논문 기여 측면에서는 VICReg가 뇌 MRI에 적용된 사례가 드물어 novelty가 있다.
+**현실적 대안 — MoCo-style memory bank**:
+- SimCLR 구조 유지하면서 negative 수 대폭 확보 (e.g. queue size=4096)
+- loss scale 변하지 않음 → AutoWeightedLoss와 호환
+- 우선순위: 🟡 중간 (downstream 평가 결과 확인 후 결정)
 
 ### 2.2 신규 Loss 후보: 뇌 나이 예측 (Brain Age Regression)
 
@@ -280,7 +282,8 @@ fomo60k_wo_scz는 조현병 제외 데이터로 pre-training 중.
 | **linear_probe.py** | ✅ 완료 | — |
 | **hemisphere asymmetry pretext task** | ✅ 완료 | — |
 | **age/sex pretext task 제거** (label leakage 방지) | ✅ 완료 | — |
-| **SimCLR → VICReg 교체** | ✅ 완료 | — |
+| ~~SimCLR → VICReg 교체~~ | ❌ 롤백 — AutoWeightedLoss 환경에서 loss scale 불균형 | — |
+| Contrastive → MoCo memory bank | 없음 | 🟡 중간 — SimCLR 호환, downstream 결과 확인 후 |
 | **downstream 평가 실행** (linear_probe.py) | 대기 중 | 🔴 높음 — loss 비교 근거 확보 |
 | MSN multi-scale feature | 없음 | 🟡 중간 — MSN plateau 해결 필요 |
 | Atlas weighted CE | 없음 | 🟡 중간 — 최대 잔여 loss 개선 |

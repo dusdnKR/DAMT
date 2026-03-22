@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from datasets import get_brain_dataet
 from models import SSLHead_Swin
 from monai import transforms
-from loss import AutoWeightedLoss, VICReg
+from loss import AutoWeightedLoss, Contrast
 from ops import rot_rand
 import utils
 import wandb
@@ -206,7 +206,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
 
         criterion_rot      = torch.nn.CrossEntropyLoss()
         criterion_loc      = torch.nn.CrossEntropyLoss()
-        criterion_contrast = VICReg()
+        criterion_contrast = Contrast(args)
         criterion_atlas    = torch.nn.CrossEntropyLoss()
         criterion_feat     = torch.nn.L1Loss()
         criterion_texture  = torch.nn.L1Loss()
