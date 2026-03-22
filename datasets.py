@@ -1,5 +1,4 @@
 import os
-import re
 import numpy as np
 import pandas as pd
 import scipy.io as sio
@@ -38,80 +37,6 @@ def _load_subjects_from_txt(data_path, data_name):
             if subject:
                 subjects.add(subject)
     return subjects, txt_path
-
-
-# ── participants.tsv (age / sex) ──────────────────────────────────────────────
-
-def _parse_subject_dir(dirname):
-    """Extract (dataset, participant_id, session_id) from a subject directory name.
-
-    Handles optional _run-X suffix that appears between session and _T1w:
-      PT028_OASIS1_sub-001_ses-01_run-1_T1w  →  (PT028_OASIS1, sub-001, ses-01)
-      PT021_IXI_sub-001_ses-01_T1w           →  (PT021_IXI,    sub-001, ses-01)
-    Returns None if the pattern is not recognised.
-    """
-    name = re.sub(r"_T1w$", "", dirname)
-    name = re.sub(r"_run-\d+", "", name)
-    m = re.match(r"^(.+?)_(sub-[^_]+)_(ses-[^_]+)$", name)
-    if m:
-        return m.group(1), m.group(2), m.group(3)
-    return None
-
-
-def _load_participants(data_path):
-    """Load participants.tsv and return per-subject age/sex lookup.
-
-    Returns
-    -------
-    tsv_lookup : dict  (dataset, participant_id, session_id) -> (z_age, sex_int)
-                 z_age  : float or np.nan  (z-scored across all valid ages in TSV)
-                 sex_int: 0=F, 1=M, -1=unknown
-    age_mean, age_std : floats used for z-scoring (also stored on args for linear_probe)
-    """
-    tsv_path = os.path.join(data_path, "participants.tsv")
-    if not os.path.isfile(tsv_path):
-        print("participants.tsv : not found — age/sex tasks disabled")
-        return {}, 0.0, 1.0
-
-    df = pd.read_csv(tsv_path, sep="\t", dtype=str)
-
-    raw_ages = []
-    raw = {}
-    for _, row in df.iterrows():
-        dataset = str(row.get("dataset", "")).strip()
-        sub     = str(row.get("participant_id", "")).strip()
-        ses     = str(row.get("session_id", "")).strip()
-        if not dataset or not sub or not ses:
-            continue
-
-        age_str = str(row.get("age", "")).strip()
-        try:
-            age = float(age_str) if age_str and age_str.lower() not in ("nan", "na", "") else np.nan
-        except ValueError:
-            age = np.nan
-
-        sex_str = str(row.get("sex", "")).strip().upper()
-        sex = 1 if sex_str == "M" else (0 if sex_str == "F" else -1)
-
-        raw[(dataset, sub, ses)] = (age, sex)
-        if not np.isnan(age):
-            raw_ages.append(age)
-
-    age_mean = float(np.mean(raw_ages)) if raw_ages else 0.0
-    age_std  = float(np.std(raw_ages))  if raw_ages else 1.0
-    if age_std < 1e-6:
-        age_std = 1.0
-
-    tsv_lookup = {}
-    for key, (age, sex) in raw.items():
-        z_age = (age - age_mean) / age_std if not np.isnan(age) else np.nan
-        tsv_lookup[key] = (z_age, sex)
-
-    n_age = sum(1 for (z, _) in tsv_lookup.values() if not np.isnan(z))
-    n_sex = sum(1 for (_, s) in tsv_lookup.values() if s >= 0)
-    print(f"participants.tsv : {len(tsv_lookup)} entries  |  age={n_age}  sex={n_sex}  "
-          f"(age mean={age_mean:.1f}, std={age_std:.1f})")
-    return tsv_lookup, age_mean, age_std
 
 
 # ── MSN loader ────────────────────────────────────────────────────────────────
@@ -188,11 +113,6 @@ def get_brain_dataet(args, transform):
         args.asym_dim = getattr(args, "asym_dim", 0)
         print("Asym CSV : not set — asym_loss will be skipped")
 
-    # ── participants.tsv (age / sex) ──────────────────────────────────────────
-    tsv_lookup, age_mean, age_std = _load_participants(data_path)
-    args.age_mean = age_mean   # expose for linear_probe normalisation
-    args.age_std  = age_std
-
     # ── Per-subject loop ──────────────────────────────────────────────────────
     for subject in filtered_subjects:
         sub_path = os.path.join(data_path, subject)
@@ -219,14 +139,6 @@ def get_brain_dataet(args, transform):
         else:
             asym = np.zeros(args.asym_dim, dtype=np.float32)
 
-        # Age / sex from participants.tsv (NaN / -1 when missing)
-        parsed = _parse_subject_dir(subject)
-        if parsed and parsed in tsv_lookup:
-            z_age, sex = tsv_lookup[parsed]
-        else:
-            z_age = np.nan
-            sex   = -1
-
         data.append({
             "image":    image,
             "label":    atlas,
@@ -234,8 +146,6 @@ def get_brain_dataet(args, transform):
             "radiomics": radiomics,
             "msn":      msn,
             "asym":     asym,
-            "age":      np.float32(z_age),   # NaN → missing; used by age_loss
-            "sex":      np.int32(sex),        # -1  → missing; used by sex_loss
         })
 
     print("subjects after data validity checks:", len(data))

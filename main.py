@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from datasets import get_brain_dataet
 from models import SSLHead_Swin
 from monai import transforms
-from loss import AutoWeightedLoss, Contrast
+from loss import AutoWeightedLoss, VICReg
 from ops import rot_rand
 import utils
 import wandb
@@ -75,8 +75,6 @@ def get_argparser():
         help='Path to hemisphere asymmetry CSV (e.g. .../results/asym_sa_gv_ta_mc_gc/asym.csv). '
              'Leave empty to disable asym_loss.')
 
-    # Brain age regression loss (uses participants.tsv — no extra flag needed)
-    # Sex classification loss (uses participants.tsv — no extra flag needed)
 
     args = parser.parse_args()
     
@@ -206,21 +204,19 @@ def main():
 def train_one_epoch(model, loss_function, data_loader, optimizer, 
                         lr_schedule, wd_schedule, epoch, fp16_scaler, args):
 
-        criterion_rot     = torch.nn.CrossEntropyLoss()
-        criterion_loc     = torch.nn.CrossEntropyLoss()
-        criterion_contrast = Contrast(args, args.batch_size_per_gpu)
-        criterion_atlas   = torch.nn.CrossEntropyLoss()
-        criterion_feat    = torch.nn.L1Loss()
-        criterion_texture = torch.nn.L1Loss()
-        criterion_msn     = torch.nn.L1Loss()
-        criterion_age     = torch.nn.SmoothL1Loss()
-        criterion_sex     = torch.nn.CrossEntropyLoss()
-        criterion_asym    = torch.nn.SmoothL1Loss()
+        criterion_rot      = torch.nn.CrossEntropyLoss()
+        criterion_loc      = torch.nn.CrossEntropyLoss()
+        criterion_contrast = VICReg()
+        criterion_atlas    = torch.nn.CrossEntropyLoss()
+        criterion_feat     = torch.nn.L1Loss()
+        criterion_texture  = torch.nn.L1Loss()
+        criterion_msn      = torch.nn.L1Loss()
+        criterion_asym     = torch.nn.SmoothL1Loss()
 
         metric_logger = utils.MetricLogger(delimiter="  ")
         header = 'Epoch: [{}/{}]'.format(epoch, args.epochs)
         for it, (images, atlases, masks, radiomics, features, loc_trues,
-                 msn_targets, asym_targets, age_targets, sex_targets) in enumerate(
+                 msn_targets, asym_targets) in enumerate(
                      metric_logger.log_every(data_loader, 100, header)):
             # update weight decay and learning rate according to their schedule
             it = len(data_loader) * epoch + it  # global training iteration
@@ -237,8 +233,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             loc_trues = loc_trues.long().cuda(non_blocking=True)
             msn_targets  = msn_targets.float().cuda(non_blocking=True)
             asym_targets = asym_targets.float().cuda(non_blocking=True)
-            age_targets  = age_targets.float().cuda(non_blocking=True)   # may contain NaN
-            sex_targets  = sex_targets.long().cuda(non_blocking=True)
 
             glo_radi = radiomics
             glo_feat = features
@@ -267,8 +261,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 contrastive1_p = model.module.forward_contrastive(cls_token1)
                 contrastive2_p = model.module.forward_contrastive(cls_token2)
                 msn_p  = model.module.forward_msn(cls_token1)
-                age_p  = model.module.forward_age(cls_token1)
-                sex_p  = model.module.forward_sex(cls_token1)
                 asym_p = model.module.forward_asym(cls_token1)
                 # local forward
                 hidden_states_out3, cls_token3 = model.module.encode(x3)
@@ -305,22 +297,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                 msn_loss  = criterion_msn(msn_p, msn_t) if msn_t.numel() > 0 else 0
                 asym_loss = criterion_asym(asym_p, asym_t) if asym_t.numel() > 0 else 0
 
-                # Brain age regression: skip samples where age is NaN (missing)
-                age_valid_mask = ~torch.isnan(age_targets.squeeze(1))
-                if age_valid_mask.any():
-                    age_loss = criterion_age(age_p[age_valid_mask],
-                                             age_targets.squeeze(1)[age_valid_mask])
-                else:
-                    age_loss = 0
-
-                # Sex classification: skip samples where sex == -1 (unknown)
-                sex_valid_mask = (sex_targets.squeeze(1) >= 0)
-                if sex_valid_mask.any():
-                    sex_loss = criterion_sex(sex_p[sex_valid_mask],
-                                             sex_targets.squeeze(1)[sex_valid_mask])
-                else:
-                    sex_loss = 0
-
                 # auto-weighted multi-task loss
                 raw_losses = {
                     "rot": rot_loss,
@@ -331,8 +307,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                     "texture": texture_loss,
                     "mim":  mim_loss,
                     "msn":  msn_loss,
-                    "age":  age_loss,
-                    "sex":  sex_loss,
                     "asym": asym_loss,
                 }
                 loss, weighted_losses = loss_function(raw_losses)
@@ -367,8 +341,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             _tex  = texture_loss.item() if isinstance(texture_loss, torch.Tensor) else 0
             _mim  = mim_loss.item()  if isinstance(mim_loss,  torch.Tensor) else 0
             _msn  = msn_loss.item()  if isinstance(msn_loss,  torch.Tensor) else 0
-            _age  = age_loss.item()  if isinstance(age_loss,  torch.Tensor) else 0
-            _sex  = sex_loss.item()  if isinstance(sex_loss,  torch.Tensor) else 0
             _asym = asym_loss.item() if isinstance(asym_loss, torch.Tensor) else 0
             metric_logger.update(loss=loss.item())
             metric_logger.update(lr=optimizer.param_groups[0]["lr"])
@@ -376,8 +348,7 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
             metric_logger.update(
                 rot_loss=_rot, loc_loss=_loc, contrastive_loss=_con,
                 atlas_loss=_atl, feat_loss=_feat, texture_loss=_tex,
-                mim_loss=_mim, msn_loss=_msn,
-                age_loss=_age, sex_loss=_sex, asym_loss=_asym,
+                mim_loss=_mim, msn_loss=_msn, asym_loss=_asym,
             )
             # ── W&B iteration-level logging (every 100 iters) ──
             if utils.is_main_process() and it % 100 == 0:
@@ -391,8 +362,6 @@ def train_one_epoch(model, loss_function, data_loader, optimizer,
                     "iter/texture_loss": _tex,
                     "iter/mim_loss": _mim,
                     "iter/msn_loss": _msn,
-                    "iter/age_loss": _age,
-                    "iter/sex_loss": _sex,
                     "iter/asym_loss": _asym,
                     "iter/lr": optimizer.param_groups[0]["lr"],
                     "iter/step": it,
@@ -538,13 +507,6 @@ class DataAugmentation(object):
         msn       = torch.nan_to_num(torch.as_tensor(np.array(image['msn'])).float())
         asym      = torch.nan_to_num(torch.as_tensor(np.array(image['asym'])).float())
 
-        # Age: keep NaN as-is (used as missing sentinel downstream)
-        age_val = image.get('age', float('nan'))
-        age = torch.tensor([float(age_val)], dtype=torch.float32)  # may be NaN
-
-        # Sex: integer label (-1 = unknown, 0 = F, 1 = M)
-        sex = torch.tensor([int(image.get('sex', -1))], dtype=torch.long)
-
         crops = []
         crops.append(self.global_transfo(image.copy()))
 
@@ -555,7 +517,7 @@ class DataAugmentation(object):
         atlases = [crop['label'] for crop in crops]
         masks   = [self.glo_mask_generator(), self.loc_mask_generator()]
 
-        return images, atlases, masks, radiomics, features, loc_true, msn, asym, age, sex
+        return images, atlases, masks, radiomics, features, loc_true, msn, asym
 
 
 

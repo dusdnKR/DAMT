@@ -63,12 +63,6 @@ class SSLHead_Swin(nn.Module):
             nn.Linear(dim // 2, msn_dim),
         )
 
-        # Brain age regression: CLS token → scalar z-scored age
-        self.age_head = nn.Linear(dim, 1)
-
-        # Sex classification: CLS token → 2-class logit (0=F, 1=M)
-        self.sex_head = nn.Linear(dim, 2)
-
         # Hemisphere asymmetry regression: CLS token → AI vector
         asym_dim = getattr(args, 'asym_dim', 0)
         if asym_dim > 0:
@@ -156,12 +150,6 @@ class SSLHead_Swin(nn.Module):
 
     def forward_msn(self, cls_token):
         return self.msn_head(cls_token)
-
-    def forward_age(self, cls_token):
-        return self.age_head(cls_token).squeeze(1)  # (B,)
-
-    def forward_sex(self, cls_token):
-        return self.sex_head(cls_token)  # (B, 2) logits
 
     def forward_asym(self, cls_token):
         if self.asym_head is None:

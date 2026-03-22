@@ -1,7 +1,8 @@
 # FUTURE_WORK: DAMT 연구 방향
 
 > **최종 수정일**: 2026-03-20
-> **현재 상태**: 11개 pretext task (rot/loc/contrastive/atlas/feat/texture/mim/msn/**age/sex/asym**) 구현 완료. linear_probe.py 완료. 30-epoch 대조 실험 분석 완료.
+> **현재 상태**: 9개 pretext task (rot/loc/**VICReg**/atlas/feat/texture/mim/msn/asym) 구현 완료. linear_probe.py 완료. 30-epoch 대조 실험 분석 완료.
+> ⚠️ **age/sex pretext task 제거** — downstream 평가 target과 동일한 신호를 pretraining에 사용하면 label leakage 발생. **SimCLR → VICReg 교체** 완료.
 
 ---
 
@@ -277,10 +278,9 @@ fomo60k_wo_scz는 조현병 제외 데이터로 pre-training 중.
 | 항목 | 상태 | 우선순위 |
 |------|------|---------|
 | **linear_probe.py** | ✅ 완료 | — |
-| **brain_age pretext task** | ✅ 완료 | — |
-| **sex classification pretext task** | ✅ 완료 | — |
 | **hemisphere asymmetry pretext task** | ✅ 완료 | — |
-| Contrastive → VICReg/BYOL 교체 | 없음 | 🔴 높음 — 현재 가장 약한 task |
+| **age/sex pretext task 제거** (label leakage 방지) | ✅ 완료 | — |
+| **SimCLR → VICReg 교체** | ✅ 완료 | — |
 | **downstream 평가 실행** (linear_probe.py) | 대기 중 | 🔴 높음 — loss 비교 근거 확보 |
 | MSN multi-scale feature | 없음 | 🟡 중간 — MSN plateau 해결 필요 |
 | Atlas weighted CE | 없음 | 🟡 중간 — 최대 잔여 loss 개선 |

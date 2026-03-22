@@ -3,26 +3,80 @@ import torch.nn as nn
 from torch.nn import functional as F
 
 
-class Contrast(nn.Module):
-    """NT-Xent contrastive loss (SimCLR-style)."""
-    def __init__(self, args, batch_size, temperature=0.5):
-        super().__init__()
-        device = torch.device(f"cuda:{args.local_rank}")
-        self.register_buffer("temp", torch.tensor(temperature).to(device))
+def _off_diagonal(x):
+    """Return all off-diagonal elements of a square matrix as a 1-D vector."""
+    n, m = x.shape
+    assert n == m
+    return x.flatten()[:-1].view(n - 1, n + 1)[:, 1:].flatten()
 
-    def forward(self, x_i, x_j):
-        z_i = F.normalize(x_i, dim=1)
-        z_j = F.normalize(x_j, dim=1)
-        N = z_i.shape[0]
-        z = torch.cat([z_i, z_j], dim=0)
-        sim = F.cosine_similarity(z.unsqueeze(1), z.unsqueeze(0), dim=2)
-        sim_ij = torch.diag(sim, N)
-        sim_ji = torch.diag(sim, -N)
-        pos = torch.cat([sim_ij, sim_ji], dim=0)
-        nom = torch.exp(pos / self.temp)
-        neg_mask = (~torch.eye(N * 2, dtype=bool, device=sim.device)).float()
-        denom = neg_mask * torch.exp(sim / self.temp)
-        return torch.sum(-torch.log(nom / torch.sum(denom, dim=1))) / (2 * N)
+
+class VICReg(nn.Module):
+    """Variance-Invariance-Covariance Regularization (VICReg).
+
+    A negative-free self-supervised objective that works well at small batch sizes.
+    Reference: Bardes et al., "VICReg: Variance-Invariance-Covariance Regularization
+    for Self-Supervised Learning", ICLR 2022.
+
+    Three terms:
+      Invariance  : MSE between the two views' embeddings (push paired reps together)
+      Variance    : hinge on per-feature std to prevent dimensional collapse
+      Covariance  : penalise off-diagonal covariance to reduce redundancy
+
+    Embeddings from all GPUs are gathered before computing variance/covariance
+    so the statistics are estimated on the full effective batch.
+    """
+
+    def __init__(self, sim_coeff: float = 25.0, std_coeff: float = 25.0,
+                 cov_coeff: float = 1.0, gamma: float = 1.0):
+        super().__init__()
+        self.sim_coeff = sim_coeff
+        self.std_coeff = std_coeff
+        self.cov_coeff = cov_coeff
+        self.gamma = gamma
+
+    @staticmethod
+    def _all_gather(tensor: torch.Tensor) -> torch.Tensor:
+        """Gather tensor from all DDP ranks; returns local tensor if not distributed."""
+        if not (torch.distributed.is_available() and torch.distributed.is_initialized()):
+            return tensor
+        world_size = torch.distributed.get_world_size()
+        if world_size == 1:
+            return tensor
+        gathered = [torch.zeros_like(tensor) for _ in range(world_size)]
+        torch.distributed.all_gather(gathered, tensor)
+        return torch.cat(gathered, dim=0)
+
+    def forward(self, z: torch.Tensor, z_prime: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            z, z_prime: projected embeddings for two augmented views, shape (N, D).
+        Returns scalar loss.
+        """
+        # Gather across all GPUs for reliable variance / covariance estimation
+        z_all       = self._all_gather(z)
+        z_prime_all = self._all_gather(z_prime)
+        N, D = z_all.shape
+
+        # ── Invariance ───────────────────────────────────────────────────────
+        sim_loss = F.mse_loss(z_all, z_prime_all)
+
+        # ── Variance ─────────────────────────────────────────────────────────
+        std_z  = torch.sqrt(z_all.var(dim=0)       + 1e-4)
+        std_zp = torch.sqrt(z_prime_all.var(dim=0) + 1e-4)
+        var_loss = (F.relu(self.gamma - std_z).mean() +
+                    F.relu(self.gamma - std_zp).mean()) / 2
+
+        # ── Covariance ────────────────────────────────────────────────────────
+        z_c   = z_all       - z_all.mean(dim=0)
+        zp_c  = z_prime_all - z_prime_all.mean(dim=0)
+        cov_z  = (z_c.T  @ z_c)  / (N - 1)
+        cov_zp = (zp_c.T @ zp_c) / (N - 1)
+        cov_loss = (_off_diagonal(cov_z).pow(2).sum() +
+                    _off_diagonal(cov_zp).pow(2).sum()) / D
+
+        return (self.sim_coeff * sim_loss
+                + self.std_coeff * var_loss
+                + self.cov_coeff * cov_loss)
 
 
 class AutoWeightedLoss(nn.Module):
@@ -39,8 +93,7 @@ class AutoWeightedLoss(nn.Module):
             be used when passing losses to ``forward()``.
     """
 
-    TASK_NAMES = ["rot", "loc", "contrastive", "atlas", "feat", "texture", "mim", "msn",
-                  "age", "sex", "asym"]
+    TASK_NAMES = ["rot", "loc", "contrastive", "atlas", "feat", "texture", "mim", "msn", "asym"]
 
     def __init__(self, task_names=None):
         super().__init__()
